@@ -85,6 +85,9 @@ data class ProductRoute(
     val showChapter: Boolean
         get() = module == Module.READING && section == Section.ASK
 
+    val showObserve: Boolean
+        get() = module == Module.READING && section == Section.OBSERVE
+
     /** 精确的「记念 / 日记 / 日记」叶子；同分类下其他分区不是正式日记入口。 */
     val isDiary: Boolean
         get() = module == Module.MEMORY &&
@@ -191,19 +194,34 @@ data class ProductRoute(
     }
 }
 
+/** Local views inside 观物; these do not allocate additional product routes. */
+enum class ObserveMode(val label: String, val unavailableMessage: String) {
+    OBJECTS("物观", "尚未连接物观内容，连接后可在这里查看与当前世界相关的观察。"),
+    PRACTICE("练凝", "尚未连接练凝服务，暂时无法开始练习或查看练习记录。"),
+}
+
+/** Back from a settings detail returns to settings; all other overlays close. */
+fun overlayBackTarget(overlay: Overlay, settingsPage: String?): Overlay =
+    if (overlay == Overlay.SETTINGS && settingsPage != null) Overlay.SETTINGS else Overlay.NONE
+
 /** Exactly one overlay at a time; [Overlay.NONE] means closed. */
 enum class Overlay { NONE, MODULES, SECTIONS, WORLD, SETTINGS }
 
 data class ShellState(
     val route: ProductRoute = ProductRoute(),
     val overlay: Overlay = Overlay.NONE,
+    val observeMode: ObserveMode = ObserveMode.OBJECTS,
 ) {
     /** Replace (never stack) the overlay, so values are mutually exclusive. */
     fun open(overlay: Overlay): ShellState = copy(overlay = overlay)
 
     /** Navigate to [route] and always close the overlay. */
     fun navigate(route: ProductRoute): ShellState =
-        copy(route = route, overlay = Overlay.NONE)
+        copy(route = route, overlay = Overlay.NONE,
+            observeMode = if (route == this.route) observeMode else ObserveMode.OBJECTS)
+
+    fun selectObserve(mode: ObserveMode): ShellState =
+        if (route.showObserve) copy(observeMode = mode) else this
 }
 
 /**

@@ -18,12 +18,13 @@ import androidx.compose.ui.unit.dp
 
 private val ShellStateSaver = listSaver<ShellState, String>(
     save = { listOf(it.route.module.name, it.route.category?.name.orEmpty(),
-        it.route.section?.name.orEmpty(), it.overlay.name) },
+        it.route.section?.name.orEmpty(), it.overlay.name, it.observeMode.name) },
     restore = { values ->
         runCatching {
             ShellState(ProductRoute(Module.valueOf(values[0]),
                 values[1].takeIf { it.isNotEmpty() }?.let { MemoryCategory.valueOf(it) },
-                values[2].takeIf { it.isNotEmpty() }?.let { Section.valueOf(it) }), Overlay.valueOf(values[3]))
+                values[2].takeIf { it.isNotEmpty() }?.let { Section.valueOf(it) }), Overlay.valueOf(values[3]),
+                values.getOrNull(4)?.let { ObserveMode.valueOf(it) } ?: ObserveMode.OBJECTS)
         }.getOrElse { ShellState() }
     },
 )
@@ -150,6 +151,14 @@ fun ProductShell(
                     Text("章节 · 尚未连接", Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp),
                         style = MaterialTheme.typography.bodyMedium, color = ProductInk.Secondary)
                 }
+                if (route.showObserve) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp)) {
+                        ObserveMode.values().forEach { mode ->
+                            PaperAction(mode.label, { state = state.selectObserve(mode) },
+                                Modifier.weight(1f), state.observeMode == mode)
+                        }
+                    }
+                }
                 NavigationLine(route, { state = state.open(Overlay.MODULES) },
                     { state = state.open(Overlay.SECTIONS) })
                 if (leaveNotice) LeaveBlockedNotice()
@@ -171,7 +180,7 @@ fun ProductShell(
                     if (availability(route, diaryContent != null) == ProductAvailability.Available) {
                         diaryContent?.invoke()
                     } else {
-                        NotConnectedPage(route) { state = state.open(Overlay.MODULES) }
+                        NotConnectedPage(route, state.observeMode) { state = state.open(Overlay.MODULES) }
                     }
                 }
             }

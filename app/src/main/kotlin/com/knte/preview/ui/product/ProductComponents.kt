@@ -63,7 +63,7 @@ internal fun BrandHeader(openSettings: () -> Unit) {
 
 @Composable
 private fun RailStub(label: String, visual: String, onClick: () -> Unit) {
-    Box(Modifier.width(48.dp).heightIn(min = 64.dp)
+    Box(Modifier.width(48.dp).heightIn(min = 48.dp)
         .semantics { contentDescription = label }
         .clickable(role = Role.Button, onClick = onClick), contentAlignment = Alignment.Center) {
         Surface(shape = RoundedCornerShape(topStart = 8.dp, topEnd = 3.dp,
@@ -99,17 +99,22 @@ internal fun PaperCard(modifier: Modifier = Modifier, content: @Composable Colum
 }
 
 @Composable
-internal fun NotConnectedPage(route: ProductRoute, onBack: () -> Unit) {
-    var expanded by rememberSaveable(route.breadcrumb) { mutableStateOf(false) }
+internal fun NotConnectedPage(route: ProductRoute, observeMode: ObserveMode, onBack: () -> Unit) {
+    var expanded by rememberSaveable(route.breadcrumb, observeMode.name) { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
         .padding(horizontal = 22.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-        Text(route.section?.label ?: route.module.label,
-            style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
+        Text(if (route.showObserve) observeMode.label else route.section?.label ?: route.module.label,
+            style = MaterialTheme.typography.labelMedium, modifier = Modifier.semantics { heading() })
         PaperCard {
-            Text("尚未连接 · NotConnected", style = MaterialTheme.typography.titleMedium)
-            Text("此处是产品导航入口，不是空数据页，也不代表该业务已经迁移。")
-            PaperAction(if (expanded) "收起依赖说明" else "展开依赖说明", { expanded = !expanded })
+            Text("尚未连接", style = MaterialTheme.typography.bodyLarge)
+            Text(if (route.showObserve) observeMode.unavailableMessage else when (route.module) {
+                Module.ZHIWEN -> "对话服务尚未连接，暂时无法发起对话。"
+                Module.READING -> "阅读内容尚未连接，暂时无法查看当前分区。"
+                else -> "${route.section?.label ?: route.module.label}内容尚未连接，暂时无法读取记录。"
+            }, style = MaterialTheme.typography.bodyMedium)
+            PaperAction(if (expanded) "收起连接详情" else "连接详情", { expanded = !expanded })
             if (expanded) {
+                Text("状态：NotConnected；未连接不代表没有记录。", style = MaterialTheme.typography.bodySmall)
                 Text(route.dependency, style = MaterialTheme.typography.bodyMedium)
                 Text("没有读取真实 Vault，没有生成、发送、录音或保存操作。连接失败不能显示为零条记录。",
                     style = MaterialTheme.typography.bodySmall, color = ProductInk.Secondary)
@@ -144,7 +149,7 @@ internal fun QuietRoom(onExit: () -> Unit) {
                 modifier = Modifier.semantics { heading() })
             Text("停一停，留一点空白。", color = ProductInk.DarkInk,
                 fontSize = 13.5.sp, lineHeight = 25.65.sp, fontFamily = FontFamily.Serif)
-            Text("仅展示暗域。保存与录音尚未连接，因此这里不接收输入，也不会声称内容已被保存。",
+            Text("保存与录音尚未连接，此刻只留一处安静的空白。",
                 color = ProductInk.DarkInk, style = MaterialTheme.typography.bodyMedium)
         }
     }

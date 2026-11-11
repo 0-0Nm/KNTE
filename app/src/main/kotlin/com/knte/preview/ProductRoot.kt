@@ -22,12 +22,15 @@ fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel) {
     ProductShell(
         noteToolContent = { NotesScreen(notes) },
         diaryContent = { DiaryScreen(diary) },
-        canLeaveContent = !busy && noteState.draft == null && diaryState.draft == null,
+        canLeaveContent = !busy && noteState.draft == null && !diaryState.hasUnsavedChanges,
         onNavigateAway = { continuation ->
             when {
                 notes.uiState.value.isBusy || diary.state.value.busy -> busyNotice = true
-                notes.uiState.value.draft != null || diary.state.value.draft != null -> pendingNavigation = continuation
-                else -> continuation()
+                notes.uiState.value.draft != null || diary.state.value.hasUnsavedChanges -> pendingNavigation = continuation
+                else -> {
+                    if (diary.state.value.draft != null) diary.discard()
+                    continuation()
+                }
             }
         },
     )

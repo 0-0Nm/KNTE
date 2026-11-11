@@ -52,6 +52,20 @@ object ProductRouteSmoke {
         verify(memoryGems != readingGems, "distinct view routes")
         verify(memoryGems.dependency.contains("同一真实珠玑源") &&
             readingGems.dependency.contains("同一真实珠玑源"), "shared real gems source contract")
+        val observe = ProductRoute(Module.READING, null, Section.OBSERVE)
+        val practice = ShellState(observe).selectObserve(ObserveMode.PRACTICE)
+        verify(practice.route == observe && practice.route.showObserve, "observe stays local")
+        verify(practice.observeMode == ObserveMode.PRACTICE, "practice context")
+        verify(practice.navigate(teacher).navigate(observe).observeMode == ObserveMode.OBJECTS,
+            "context reset after leaving observe")
+        verify(!teacher.showObserve && !ask.showObserve, "no observe context on other reading pages")
+        verify(availability(practice.route, true) is ProductAvailability.NotConnected, "no fake practice data")
+        verify(overlayBackTarget(Overlay.SETTINGS, "data") == Overlay.SETTINGS, "detail back")
+        verify(overlayBackTarget(Overlay.SETTINGS, null) == Overlay.NONE, "settings root back")
+        for (origin in leaves.filter { it.module != Module.QUIET }) {
+            val quiet = ShellState(origin).navigate(ProductRoute.initial(Module.QUIET))
+            verify(quiet.navigate(origin).route == origin, "quiet restores exact origin")
+        }
         println("PASS ProductRouteSmoke: $assertions assertions; 21 leaves; 320 combinations; no Compose/runtime claims")
     }
 }

@@ -2,6 +2,7 @@ package com.knte.preview.diary
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -16,7 +17,13 @@ import com.knte.core.diary.DiaryCodec
 fun DiaryScreen(viewModel: DiaryViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var discard by rememberSaveable { mutableStateOf(false) }
-    BackHandler(enabled = state.draft != null) { if (!state.busy) discard = true }
+    var showWriteDetails by rememberSaveable { mutableStateOf(false) }
+    fun cancelEditor() {
+        if (!state.busy) {
+            if (state.hasUnsavedChanges) discard = true else viewModel.discard()
+        }
+    }
+    BackHandler(enabled = state.draft != null) { cancelEditor() }
     if (discard && state.draft != null) AlertDialog(
         onDismissRequest = { discard = false }, title = { Text("放弃隔离日记草稿？") },
         text = { Text("不会修改或删除已保存的 Markdown 文档。") },
@@ -28,8 +35,14 @@ fun DiaryScreen(viewModel: DiaryViewModel) {
             text = { Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text("目标：${plan.name}\n范围：本App私有隔离验证库，非真实Vault\n操作：${if (plan.expectedRevision == null) "新建；同名拒绝" else "修订正文；保留原元信息与前镜像"}")
                 Text("日期：${state.draft?.date}\n${if (plan.expectedRevision == null) "source=self · type=journal" else "元信息按原字节保留"}")
-                Text("新内容 SHA-256：${plan.proposedRevision}", style = MaterialTheme.typography.bodySmall)
-                Text("仅本进程合作式锁；不承诺多应用外部并发安全。取消不会写入。")
+                Text("取消不会写入。请勿同时从其他应用修改同一文档。")
+                TextButton(onClick = { showWriteDetails = !showWriteDetails }) {
+                    Text(if (showWriteDetails) "收起校验详情" else "查看校验详情")
+                }
+                if (showWriteDetails) {
+                    Text("新内容 SHA-256：${plan.proposedRevision}", style = MaterialTheme.typography.bodySmall)
+                    Text("仅本进程合作式锁；不承诺多应用外部并发安全。", style = MaterialTheme.typography.bodySmall)
+                }
             } },
             confirmButton = { TextButton(onClick = viewModel::commit, enabled = !state.busy) { Text("确认写入") } },
             dismissButton = { TextButton(onClick = viewModel::dismissConfirmation) { Text("取消") } })
@@ -45,7 +58,7 @@ fun DiaryScreen(viewModel: DiaryViewModel) {
             if (state.reviewRequired) Text("待人工核对：该状态下禁止再次写入，不自动恢复或清理 pending。")
             val d = state.draft
             if (d != null) {
-                Text("草稿，尚未保存", style = MaterialTheme.typography.labelMedium)
+                Text(if (state.hasUnsavedChanges) "草稿，尚未保存" else "内容未修改", style = MaterialTheme.typography.labelMedium)
                 OutlinedTextField(d.date, viewModel::dateChanged, singleLine = true,
                     enabled = !state.busy && !state.reviewRequired && d.name == null,
                     label = { Text("日期 YYYY-MM-DD") }, modifier = Modifier.fillMaxWidth())
@@ -59,7 +72,7 @@ fun DiaryScreen(viewModel: DiaryViewModel) {
                 if (state.loaded && state.entries.isEmpty() && state.error == null) Text("隔离库读取成功，暂无日记。")
                 state.entries.forEach { entry ->
                     OutlinedButton(onClick = { viewModel.open(entry.name) }, enabled = !state.busy && !state.reviewRequired,
-                        modifier = Modifier.fillMaxWidth()) { Column(Modifier.fillMaxWidth()) {
+                        shape = RoundedCornerShape(3.dp), modifier = Modifier.fillMaxWidth()) { Column(Modifier.fillMaxWidth()) {
                         Text(entry.name); Text(entry.document.body.take(160), style = MaterialTheme.typography.bodyMedium)
                         if (!entry.document.editable) Text("只读：${entry.document.problems.joinToString()}")
                     } }
@@ -73,7 +86,7 @@ fun DiaryScreen(viewModel: DiaryViewModel) {
                 TextButton(onClick = viewModel::reload, enabled = !state.busy) { Text("重新读取") }
             } else {
                 Button(onClick = viewModel::prepare, enabled = !state.busy && !state.reviewRequired) { Text("核对保存") }
-                TextButton(onClick = { discard = true }, enabled = !state.busy) { Text("取消编辑") }
+                TextButton(onClick = { cancelEditor() }, enabled = !state.busy) { Text("取消编辑") }
             }
         }
     }

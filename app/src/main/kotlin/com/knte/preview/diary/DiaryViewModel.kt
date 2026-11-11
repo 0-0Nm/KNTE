@@ -18,11 +18,18 @@ private const val PREFIX = "knte.isolated.diary."
 const val DIARY_DRAFT_BYTES = 32768
 
 data class DiaryDraft(val name: String? = null, val revision: String? = null,
-    val date: String = LocalDate.now().toString(), val body: String = "")
+    val date: String = LocalDate.now().toString(), val body: String = "",
+    val baselineBody: String? = null, val baselineDate: String? = null) {
+    val dirty: Boolean get() = if (name == null) body.isNotEmpty() else
+        baselineBody == null || baselineDate == null || body != baselineBody || date != baselineDate
+}
 data class DiaryUiState(val entries: List<DiaryEntry> = emptyList(), val loaded: Boolean = false,
     val draft: DiaryDraft? = null, val busy: Boolean = false,
     val confirmation: DiaryWritePlan? = null, val error: String? = null,
-    val notice: String? = null, val reviewRequired: Boolean = false)
+    val notice: String? = null, val reviewRequired: Boolean = false) {
+    val hasUnsavedChanges: Boolean get() = draft?.dirty == true
+    val canLeave: Boolean get() = !busy && !hasUnsavedChanges
+}
 
 /** Owns only the app-private isolated Markdown validation store, never a live Vault. */
 class DiaryViewModel(private val store: () -> IsolatedDiaryRepository,
@@ -35,8 +42,9 @@ class DiaryViewModel(private val store: () -> IsolatedDiaryRepository,
             val body = handle.get<String>(PREFIX + "body").orEmpty()
             if (DiaryCodec.encode(body).size <= DIARY_DRAFT_BYTES) {
                 _state.update { it.copy(draft = DiaryDraft(handle[PREFIX + "name"], handle[PREFIX + "revision"],
-                    handle.get<String>(PREFIX + "date") ?: LocalDate.now().toString(), body),
-                    notice = "已恢复隔离日记草稿；尚未保存。确认计划需要重新生成。") }
+                    handle.get<String>(PREFIX + "date") ?: LocalDate.now().toString(), body,
+                    handle[PREFIX + "baselineBody"], handle[PREFIX + "baselineDate"]),
+                    notice = "已恢复编辑状态；实际改动以原内容基线判断，确认计划需要重新生成。") }
             }
         }
         if (handle.get<Boolean>(PREFIX + "writing") == true) {
@@ -72,7 +80,8 @@ class DiaryViewModel(private val store: () -> IsolatedDiaryRepository,
                 check(entry.document.editable) { "只读文档：${entry.document.problems.joinToString()}" }
                 check(DiaryCodec.encode(entry.document.body).size <= DIARY_DRAFT_BYTES) { "正文超过本切片32KiB草稿上限，不进入编辑且不截断原文" }
                 val d = DiaryDraft(entry.name, entry.document.revision,
-                    entry.document.metadata?.date ?: entry.name.removeSuffix(".md"), entry.document.body)
+                    entry.document.metadata?.date ?: entry.name.removeSuffix(".md"), entry.document.body,
+                    entry.document.body, entry.document.metadata?.date ?: entry.name.removeSuffix(".md"))
                 _state.update { it.copy(busy = false) }; draft(d)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
@@ -99,7 +108,9 @@ class DiaryViewModel(private val store: () -> IsolatedDiaryRepository,
         handle[PREFIX + "draft"] = true; handle[PREFIX + "name"] = d.name
         handle[PREFIX + "revision"] = d.revision; handle[PREFIX + "date"] = d.date
         handle[PREFIX + "body"] = d.body
-        _state.update { it.copy(draft = d, confirmation = null, error = null) }
+        handle[PREFIX + "baselineBody"] = d.baselineBody
+        handle[PREFIX + "baselineDate"] = d.baselineDate
+        _state.update { it.copy(draft = d, confirmation = null, error = null, notice = null) }
     }
     fun prepare() {
         val s = _state.value;val d = s.draft ?: return
@@ -149,6 +160,6 @@ class DiaryViewModel(private val store: () -> IsolatedDiaryRepository,
             notice = "已放弃当前草稿；不删除已存文档。") }
     }
     private fun clearDraft() {
-        listOf("draft", "name", "revision", "date", "body").forEach { handle.remove<Any?>(PREFIX + it) }
+        listOf("draft", "name", "revision", "date", "body", "baselineBody", "baselineDate").forEach { handle.remove<Any?>(PREFIX + it) }
     }
 }

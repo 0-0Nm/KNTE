@@ -92,4 +92,28 @@ class DiaryViewModelTest {
         vm.prepare();vm.commit();advanceUntilIdle()
         assertTrue(repo.list().isEmpty());assertEquals("uncertain",vm.state.value.draft?.body)
     }
+    @Test fun openedUnchangedDiaryIsCleanAndRevertingBodyRestoresCleanState() = runVm { vm, repo, _, _ ->
+        advanceUntilIdle()
+        val p = repo.planCreate(DiaryCodec.create("2026-11-11", "baseline"))
+        repo.commit(p, p.confirmation)
+        vm.open("2026-11-11.md"); advanceUntilIdle()
+        assertFalse(vm.state.value.hasUnsavedChanges); assertTrue(vm.state.value.canLeave)
+        vm.bodyChanged("changed"); assertTrue(vm.state.value.hasUnsavedChanges)
+        vm.bodyChanged("baseline"); assertFalse(vm.state.value.hasUnsavedChanges)
+    }
+    @Test fun emptyNewDiaryIsCleanButTypedNewDiaryRequiresProtection() = runVm { vm, _, _, _ ->
+        advanceUntilIdle(); vm.newDiary()
+        assertFalse(vm.state.value.hasUnsavedChanges)
+        vm.bodyChanged("draft"); assertTrue(vm.state.value.hasUnsavedChanges)
+        vm.bodyChanged(""); assertFalse(vm.state.value.hasUnsavedChanges)
+    }
+    @Test fun restoredExistingDraftWithoutBaselineFailsClosedAsDirty() = runVm(SavedStateHandle(mapOf(
+        "knte.isolated.diary.draft" to true,
+        "knte.isolated.diary.name" to "2026-11-11.md",
+        "knte.isolated.diary.date" to "2026-11-11",
+        "knte.isolated.diary.body" to "unknown baseline"
+    ))) { vm, _, _, _ ->
+        advanceUntilIdle(); assertTrue(vm.state.value.hasUnsavedChanges)
+    }
+
 }

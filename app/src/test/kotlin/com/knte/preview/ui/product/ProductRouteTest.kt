@@ -341,4 +341,51 @@ class ProductRouteTest {
         assertFalse(hasPrimarySendAction(ProductRoute(), true))
         assertFalse(hasPrimarySendAction(ShellState().route, false))
     }
+    @Test
+    fun observeModesStayLocalAndNeverLeakAcrossRoutes() {
+        val observe = ProductRoute(Module.READING, null, Section.OBSERVE)
+        assertTrue(observe.showObserve)
+        assertTrue(observe.showWorld)
+        assertFalse(observe.showChapter)
+        ProductRoute.leaves.filter { it != observe }.forEach { route ->
+            assertFalse(route.showObserve)
+            assertEquals(ShellState(route), ShellState(route).selectObserve(ObserveMode.PRACTICE))
+        }
+        val practice = ShellState(observe).selectObserve(ObserveMode.PRACTICE)
+        assertEquals(observe, practice.route)
+        assertEquals(ObserveMode.PRACTICE, practice.observeMode)
+        assertEquals(ObserveMode.PRACTICE, practice.open(Overlay.SETTINGS).observeMode)
+        assertEquals(ObserveMode.PRACTICE, practice.navigate(observe).observeMode)
+        assertTrue(availability(practice.route, true) is ProductAvailability.NotConnected)
+        val teacher = ProductRoute(Module.READING, null, Section.TEACHERS)
+        val returned = practice.navigate(teacher).navigate(observe)
+        assertEquals(ObserveMode.OBJECTS, returned.observeMode)
+        assertEquals(21, ProductRoute.leaves.size)
+        assertNotEquals(ObserveMode.OBJECTS.unavailableMessage, ObserveMode.PRACTICE.unavailableMessage)
+    }
+
+    @Test
+    fun settingsBackUnwindsDetailBeforeClosingOverlay() {
+        assertEquals(Overlay.SETTINGS, overlayBackTarget(Overlay.SETTINGS, "about"))
+        assertEquals(Overlay.SETTINGS, overlayBackTarget(Overlay.SETTINGS, "data"))
+        assertEquals(Overlay.NONE, overlayBackTarget(Overlay.SETTINGS, null))
+        Overlay.values().filter { it != Overlay.SETTINGS }.forEach { overlay ->
+            assertEquals(Overlay.NONE, overlayBackTarget(overlay, "stale-detail"))
+        }
+    }
+
+    @Test
+    fun quietRoundTripPreservesExactOriginAndClosesOverlay() {
+        ProductRoute.leaves.filter { it.module != Module.QUIET }.forEach { origin ->
+            val before = ShellState(origin).open(Overlay.MODULES).open(Overlay.NONE)
+            val quiet = before.navigate(ProductRoute.initial(Module.QUIET))
+            assertEquals(Module.QUIET, quiet.route.module)
+            assertEquals(Overlay.NONE, quiet.overlay)
+            assertTrue(availability(quiet.route, true) is ProductAvailability.NotConnected)
+            val restored = quiet.navigate(before.route)
+            assertEquals(origin, restored.route)
+            assertEquals(Overlay.NONE, restored.overlay)
+        }
+    }
+
 }
