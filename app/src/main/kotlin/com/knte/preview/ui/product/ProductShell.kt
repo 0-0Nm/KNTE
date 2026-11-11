@@ -60,6 +60,7 @@ fun ProductShell(
     accountingContent: (@Composable (Section) -> Unit)? = null,
     readingContent: (@Composable () -> Unit)? = null,
     habitContent: (@Composable () -> Unit)? = null,
+    referenceContent: (@Composable (Section) -> Unit)? = null,
 ) {
     var state by rememberSaveable(stateSaver = ShellStateSaver) { mutableStateOf(ShellState()) }
     var beforeQuiet by rememberSaveable(stateSaver = ShellStateSaver) { mutableStateOf(ShellState()) }
@@ -69,9 +70,10 @@ fun ProductShell(
     val route = state.route
     val isTime = route.module == Module.MEMORY && route.category == MemoryCategory.TIME && route.section == Section.TIME
     val isLocalReading = route.module == Module.READING && route.section == Section.ASK && readingContent != null
+    val isReference = route.module == Module.MEMORY && (route.section == Section.LESSONS || route.section == Section.REMINDERS)
     val isHabit = route.module == Module.MEMORY && route.category == MemoryCategory.TIME && route.section == Section.HABITS
     val isAccounting = route.module == Module.MEMORY && route.category == MemoryCategory.ACCOUNTING
-    val hostsContent = toolOpen || (route.isDiary && diaryContent != null) || (isTime && timeContent != null) || (isAccounting && accountingContent != null) || (isHabit && habitContent != null)
+    val hostsContent = toolOpen || (route.isDiary && diaryContent != null) || (isTime && timeContent != null) || (isAccounting && accountingContent != null) || (isHabit && habitContent != null) || (isReference && referenceContent != null)
 
     fun leave(proceed: () -> Unit) {
         if (!hostsContent) { leaveNotice = false; proceed(); return }
@@ -185,7 +187,9 @@ fun ProductShell(
                         y += spacing
                     }
                 }) {
-                    if (isHabit && habitContent != null) {
+                    if (isReference && referenceContent != null) {
+                        referenceContent(requireNotNull(route.section))
+                    } else if (isHabit && habitContent != null) {
                         habitContent()
                     } else if (isLocalReading && readingContent != null) {
                         readingContent()

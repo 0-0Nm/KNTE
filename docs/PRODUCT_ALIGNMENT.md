@@ -56,3 +56,10 @@ Alarm or notification delivery are implemented by this slice.
 Reference weighting, scope, deterministic draw/replay and input binding have pure-domain tests;
 reference JSONL persistence, cross-file witnesses and conversation citation integration remain unimplemented.
 Book TOC numbering now uses the core's one-based ordinal without adding one again.
+
+## Reference App isolated workflows (preview10 source)
+Memo and pitfall routes now host explicit manual creation, memo completion and archival confirmations.
+The aggregate store is private validation data, not the formal four-file source. No production-source
+migration, automatic same-pitfall judgement, count merging, split, restore or conversation integration
+is implied. Pending classification is read-only and never unlocks or retries a write.
+Device acceptance remains blocked by insufficient storage; latest observed installed build is preview8.

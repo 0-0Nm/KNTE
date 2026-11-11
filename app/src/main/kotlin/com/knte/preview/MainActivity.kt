@@ -7,6 +7,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import com.knte.preview.source.*
 import com.knte.preview.reading.*
 import com.knte.preview.habit.HabitViewModel
+import com.knte.preview.reference.ReferenceViewModel
+import com.knte.core.reference.store.ReferenceStoreApi
 import com.knte.core.habit.HabitLedgerApi
 import com.knte.core.habit.HabitLedgerStore
 import com.knte.core.reading.position.FileReadingPositionStore
@@ -132,12 +134,22 @@ class MainActivity : ComponentActivity() {
                 return HabitViewModel({ habitStorage }, extras.createSavedStateHandle()) as T
             }
         }
+        val referenceFactory = object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
+                require(modelClass.isAssignableFrom(ReferenceViewModel::class.java))
+                @Suppress("UNCHECKED_CAST")
+                return ReferenceViewModel({ ReferenceStoreApi.open(
+                    File(filesDir.canonicalFile, "isolated-reference-contract-v1").toPath()) },
+                    extras.createSavedStateHandle()) as T
+            }
+        }
         setContent {
             val stateHolder: NoteViewModel = viewModel(factory = factory)
             val diaryHolder: DiaryViewModel = viewModel(factory = diaryFactory)
             val timeHolder: TimeViewModel = viewModel(factory = timeFactory)
             val accountingHolder: AccountingViewModel = viewModel(factory = accountingFactory)
             val habitHolder: HabitViewModel = viewModel(factory = habitFactory)
+            val referenceHolder: ReferenceViewModel = viewModel(factory = referenceFactory)
             ProductRoot(stateHolder, diaryHolder, timeHolder, accountingHolder, sourceHolder,
                 chooseSource = {
                     chooseSource.launch(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
@@ -146,7 +158,7 @@ class MainActivity : ComponentActivity() {
                     chooseBook.launch(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*")
                         .addCategory(Intent.CATEGORY_OPENABLE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         .putExtra(Intent.EXTRA_MIME_TYPES,arrayOf("text/plain","text/markdown","text/x-markdown")))
-                }, habit = habitHolder)
+                }, habit = habitHolder, reference = referenceHolder)
         }
     }
 }
