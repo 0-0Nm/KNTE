@@ -35,3 +35,10 @@ Time supports confirmed start/stop plus pure amend/rename projections; no notifi
 repeat scheduling or formal source authority is claimed. Accounting supports confirmed manual entries,
 exact cents, ledger/month/category views; AI parsing and reversal writes remain unavailable.
 These additions do not connect real `.knte` or Vault data and do not close all product gaps above.
+
+## Explicit read-only source adapter (preview6 source)
+The diary page can request ACTION_OPEN_DOCUMENT_TREE and retain only the granted read permission.
+Only direct-child Markdown files are enumerated; original files are never edited or migrated.
+Not-selected, revoked permission, successful-empty and provider error are separate states.
+A chosen source has no fallback to the isolated validation store. Real-provider behavior and
+permission revocation still require device acceptance; fake-provider tests do not establish SAF acceptance.

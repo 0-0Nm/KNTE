@@ -1,6 +1,6 @@
 package com.knte.preview
 
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.*
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -8,6 +8,8 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.knte.preview.diary.DiaryScreen
 import com.knte.preview.diary.DiaryViewModel
+import com.knte.preview.source.SourceScreen
+import com.knte.preview.source.SourceViewModel
 import com.knte.preview.accounting.AccountingScreen
 import com.knte.preview.accounting.AccountingViewModel
 import com.knte.preview.accounting.AccountingSection
@@ -19,7 +21,8 @@ import com.knte.preview.ui.product.ProductShell
 
 /** Repository/VM state stays above route composition. Tool and diary never share a format. */
 @Composable
-fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel, accounting: AccountingViewModel) {
+fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel, accounting: AccountingViewModel, source: SourceViewModel, chooseSource: () -> Unit) {
+    var showSource by remember { mutableStateOf(true) }
     val noteState by notes.uiState.collectAsStateWithLifecycle()
     val diaryState by diary.state.collectAsStateWithLifecycle()
     val timeState by time.state.collectAsStateWithLifecycle()
@@ -29,7 +32,21 @@ fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel
     val busy = noteState.isBusy || diaryState.busy || timeState.busy || accountingState.busy
     ProductShell(
         noteToolContent = { NotesScreen(notes) },
-        diaryContent = { DiaryScreen(diary) },
+        diaryContent = {
+            Column {
+                androidx.compose.foundation.layout.Row {
+                    TextButton(onClick = {
+                        if (diary.state.value.busy) busyNotice = true
+                        else if (diary.state.value.hasUnsavedChanges) busyNotice = true
+                        else { diary.discard(); showSource = true }
+                    }) { Text("所选目录 · 只读") }
+                    TextButton(onClick = { showSource = false }) { Text("隔离验证库") }
+                }
+                androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.weight(1f)) {
+                    if (showSource) SourceScreen(source, chooseSource) else DiaryScreen(diary)
+                }
+            }
+        },
         timeContent = { TimeScreen(time) },
         accountingContent = { section -> AccountingScreen(accounting, when (section) {
             Section.REPORTS -> AccountingSection.MONTH

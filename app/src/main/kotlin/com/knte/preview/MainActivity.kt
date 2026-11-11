@@ -1,6 +1,10 @@
 package com.knte.preview
 
 import android.os.Bundle
+import android.content.Intent
+import android.provider.DocumentsContract
+import androidx.activity.result.contract.ActivityResultContracts
+import com.knte.preview.source.*
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.ViewModel
@@ -71,12 +75,38 @@ class MainActivity : ComponentActivity() {
                 return AccountingViewModel({ accountingStorage }, extras.createSavedStateHandle()) as T
             }
         }
+        val sourceEngine = ReadOnlyDiarySourceImpl(AndroidSourceDocumentProvider(contentResolver))
+        val sourcePrefs = AndroidSourcePreferences(applicationContext)
+        val sourceFactory = object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
+                require(modelClass.isAssignableFrom(SourceViewModel::class.java))
+                @Suppress("UNCHECKED_CAST")
+                return SourceViewModel(sourceEngine, sourcePrefs) as T
+            }
+        }
+        // Registered before STARTED; callback runs only after an explicit system picker result.
+        val sourceHolder = ViewModelProvider(this, sourceFactory)[SourceViewModel::class.java]
+        val chooseSource = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val data = result.data
+            val uri = data?.data
+            if (result.resultCode == RESULT_OK && uri != null) {
+                try {
+                    check((data?.flags ?: 0) and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
+                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    sourceHolder.select(SourceRoot.bind(uri.toString(),
+                        DocumentsContract.getTreeDocumentId(uri), SourcePermission.Granted))
+                } catch (_: Exception) { sourceHolder.selectionFailed() }
+            }
+        }
         setContent {
             val stateHolder: NoteViewModel = viewModel(factory = factory)
             val diaryHolder: DiaryViewModel = viewModel(factory = diaryFactory)
             val timeHolder: TimeViewModel = viewModel(factory = timeFactory)
             val accountingHolder: AccountingViewModel = viewModel(factory = accountingFactory)
-            ProductRoot(stateHolder, diaryHolder, timeHolder, accountingHolder)
+            ProductRoot(stateHolder, diaryHolder, timeHolder, accountingHolder, sourceHolder) {
+                chooseSource.launch(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION))
+            }
         }
     }
 }

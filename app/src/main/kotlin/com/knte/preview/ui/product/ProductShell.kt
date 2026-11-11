@@ -168,7 +168,7 @@ fun ProductShell(
                 if (leaveNotice) LeaveBlockedNotice()
                 if (route.isDiary) {
                     Surface(color = ProductInk.Paper2) {
-                        Text(if (diaryContent != null) "隔离验证库，未接真实Vault" else "正式日记尚未接入 · 不使用私有 .note 工具代替",
+                        Text(if (diaryContent != null) "日记来源由下方页面标明 · 所选目录只读／隔离库独立" else "正式日记尚未接入 · 不使用私有 .note 工具代替",
                             Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp),
                             style = MaterialTheme.typography.bodySmall, color = ProductInk.Secondary)
                     }
