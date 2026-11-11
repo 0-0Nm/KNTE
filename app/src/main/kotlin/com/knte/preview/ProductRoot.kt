@@ -8,6 +8,8 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.knte.preview.diary.DiaryScreen
 import com.knte.preview.diary.DiaryViewModel
+import com.knte.preview.reading.ReadingScreen
+import com.knte.preview.reading.ReadingViewModel
 import com.knte.preview.source.SourceScreen
 import com.knte.preview.source.SourceViewModel
 import com.knte.preview.accounting.AccountingScreen
@@ -21,7 +23,7 @@ import com.knte.preview.ui.product.ProductShell
 
 /** Repository/VM state stays above route composition. Tool and diary never share a format. */
 @Composable
-fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel, accounting: AccountingViewModel, source: SourceViewModel, chooseSource: () -> Unit) {
+fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel, accounting: AccountingViewModel, source: SourceViewModel, chooseSource: () -> Unit, reading: ReadingViewModel, chooseBook: () -> Unit) {
     var showSource by remember { mutableStateOf(true) }
     val noteState by notes.uiState.collectAsStateWithLifecycle()
     val diaryState by diary.state.collectAsStateWithLifecycle()
@@ -48,6 +50,7 @@ fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel
             }
         },
         timeContent = { TimeScreen(time) },
+        readingContent = { ReadingScreen(reading, chooseBook) },
         accountingContent = { section -> AccountingScreen(accounting, when (section) {
             Section.REPORTS -> AccountingSection.MONTH
             Section.STATISTICS -> AccountingSection.CATEGORY

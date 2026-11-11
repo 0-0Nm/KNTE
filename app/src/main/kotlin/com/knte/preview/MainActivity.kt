@@ -5,6 +5,8 @@ import android.content.Intent
 import android.provider.DocumentsContract
 import androidx.activity.result.contract.ActivityResultContracts
 import com.knte.preview.source.*
+import com.knte.preview.reading.*
+import com.knte.core.reading.position.FileReadingPositionStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.ViewModel
@@ -98,15 +100,39 @@ class MainActivity : ComponentActivity() {
                 } catch (_: Exception) { sourceHolder.selectionFailed() }
             }
         }
+        val readingPositions by lazy {
+            FileReadingPositionStore(File(filesDir.canonicalFile, "reading-positions-v1"))
+        }
+        val readingFactory = object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
+                require(modelClass.isAssignableFrom(ReadingViewModel::class.java))
+                @Suppress("UNCHECKED_CAST")
+                return ReadingViewModel(AndroidBookLoader(contentResolver), { readingPositions }) as T
+            }
+        }
+        val readingHolder = ViewModelProvider(this, readingFactory)[ReadingViewModel::class.java]
+        val chooseBook = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val data = result.data
+            val uri = data?.data
+            if (result.resultCode == RESULT_OK && uri != null) {
+                if ((data?.flags ?: 0) and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
+                    readingHolder.select(uri.toString()) else readingHolder.selectionFailed()
+            } else readingHolder.selectionFailed()
+        }
         setContent {
             val stateHolder: NoteViewModel = viewModel(factory = factory)
             val diaryHolder: DiaryViewModel = viewModel(factory = diaryFactory)
             val timeHolder: TimeViewModel = viewModel(factory = timeFactory)
             val accountingHolder: AccountingViewModel = viewModel(factory = accountingFactory)
-            ProductRoot(stateHolder, diaryHolder, timeHolder, accountingHolder, sourceHolder) {
-                chooseSource.launch(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION))
-            }
+            ProductRoot(stateHolder, diaryHolder, timeHolder, accountingHolder, sourceHolder,
+                chooseSource = {
+                    chooseSource.launch(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION))
+                }, reading = readingHolder, chooseBook = {
+                    chooseBook.launch(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*")
+                        .addCategory(Intent.CATEGORY_OPENABLE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        .putExtra(Intent.EXTRA_MIME_TYPES,arrayOf("text/plain","text/markdown","text/x-markdown")))
+                })
         }
     }
 }

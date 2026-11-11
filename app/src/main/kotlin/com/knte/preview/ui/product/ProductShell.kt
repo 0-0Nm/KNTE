@@ -58,6 +58,7 @@ fun ProductShell(
     onNavigateAway: ((continueNavigation: () -> Unit) -> Unit)? = null,
     timeContent: (@Composable () -> Unit)? = null,
     accountingContent: (@Composable (Section) -> Unit)? = null,
+    readingContent: (@Composable () -> Unit)? = null,
 ) {
     var state by rememberSaveable(stateSaver = ShellStateSaver) { mutableStateOf(ShellState()) }
     var beforeQuiet by rememberSaveable(stateSaver = ShellStateSaver) { mutableStateOf(ShellState()) }
@@ -66,6 +67,7 @@ fun ProductShell(
     var leaveNotice by rememberSaveable { mutableStateOf(false) }
     val route = state.route
     val isTime = route.module == Module.MEMORY && route.category == MemoryCategory.TIME && route.section == Section.TIME
+    val isLocalReading = route.module == Module.READING && route.section == Section.ASK && readingContent != null
     val isAccounting = route.module == Module.MEMORY && route.category == MemoryCategory.ACCOUNTING
     val hostsContent = toolOpen || (route.isDiary && diaryContent != null) || (isTime && timeContent != null) || (isAccounting && accountingContent != null)
 
@@ -148,10 +150,10 @@ fun ProductShell(
                         }
                     }
                 }
-                if (route.showWorld) {
+                if (route.showWorld && !isLocalReading) {
                     PaperAction("世界 · 尚未连接", { state = state.open(Overlay.WORLD) }, Modifier.fillMaxWidth())
                 }
-                if (route.showChapter) {
+                if (route.showChapter && !isLocalReading) {
                     Text("章节 · 尚未连接", Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp),
                         style = MaterialTheme.typography.bodyMedium, color = ProductInk.Secondary)
                 }
@@ -181,7 +183,9 @@ fun ProductShell(
                         y += spacing
                     }
                 }) {
-                    if (isAccounting && accountingContent != null) {
+                    if (isLocalReading && readingContent != null) {
+                        readingContent()
+                    } else if (isAccounting && accountingContent != null) {
                         accountingContent(requireNotNull(route.section))
                     } else if (isTime && timeContent != null) {
                         timeContent()

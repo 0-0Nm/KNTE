@@ -42,3 +42,9 @@ Only direct-child Markdown files are enumerated; original files are never edited
 Not-selected, revoked permission, successful-empty and provider error are separate states.
 A chosen source has no fallback to the isolated validation store. Real-provider behavior and
 permission revocation still require device acceptance; fake-provider tests do not establish SAF acceptance.
+
+## Local reading source slice (preview8)
+The reading/ask entry hosts a local TXT/Markdown reader: explicit system document selection,
+strict bounded UTF-8 import, real chapter index and original text, and explicit private chapter-position save.
+Books are not automatically copied or uploaded. This does not implement AI discussion, worlds,
+teachers, exercises, annotations or a complete bookshelf. PDF/EPUB and automatic cross-process restore are unsupported.
