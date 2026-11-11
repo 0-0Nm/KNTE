@@ -20,3 +20,6 @@ SavedState is a bounded convenience for UI recreation, not a durable operation r
 ## Deliberate exclusions
 No universal journal framework, dependency injection framework, Room database, networking or automatic migration is introduced just for scaffolding. Evaluate each when a real vertical flow needs it.
 A new internal preview record format does not supersede the legacy user's Markdown/JSONL contracts.
+
+### Android platform root alias
+The Activity adapter resolves only the framework-provided `filesDir` canonical root inside its lazy IO operation before appending the controlled preview leaf. Core still rejects arbitrary symbolic-link roots/entries; it does not weaken checks globally for externally selected paths. Canonical framework aliases and Android filesystem durability require device validation.

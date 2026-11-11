@@ -21,7 +21,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Construct the storage on its first IO-dispatched operation, not in Activity.onCreate.
         val repository = object : NoteRepository {
-            private val storage by lazy { FileNoteRepository(File(filesDir, "preview-notes-v1")) }
+            private val storage by lazy { FileNoteRepository(File(filesDir.canonicalFile, "preview-notes-v1")) }
             override fun list(): List<Note> = storage.list()
             override fun get(id: String): Note? = storage.get(id)
             override fun create(title: String, body: String, nowMillis: Long): Note =

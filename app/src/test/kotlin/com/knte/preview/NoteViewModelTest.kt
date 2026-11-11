@@ -226,6 +226,44 @@ class NoteViewModelTest {
     }
 
     @Test
+    fun emptyTitleSaveIsRejectedWithoutRepositoryWrite() = runVmTest { vm, repo, _ ->
+        advanceUntilIdle()
+        vm.newNote()
+        vm.onBodyChange("正文")
+        vm.save()
+        advanceUntilIdle()
+        assertEquals(NotesStatus.Error, vm.uiState.value.status)
+        assertTrue(vm.uiState.value.error!!.contains("标题不能为空"))
+        assertNotNull(vm.uiState.value.draft)
+        assertEquals(0, repo.createCalls)
+    }
+
+    @Test
+    fun overlongTitleIsRejectedWithoutSilentlyTrimmingDraft() = runVmTest { vm, _, _ ->
+        advanceUntilIdle()
+        vm.newNote()
+        vm.onTitleChange("original")
+        vm.onTitleChange("😀".repeat(121))
+        assertEquals("original", vm.uiState.value.draft!!.title)
+        assertTrue(vm.uiState.value.notice!!.contains("120"))
+        vm.onTitleChange("😀".repeat(120))
+        assertEquals(120, vm.uiState.value.draft!!.title.codePointCount(0, vm.uiState.value.draft!!.title.length))
+    }
+
+    @Test
+    fun existingDraftCannotBeReplacedByNewOrOpen() = runVmTest { vm, repo, _ ->
+        advanceUntilIdle()
+        repo.seed("id-existing", "stored", "body")
+        vm.newNote()
+        vm.onTitleChange("unsaved")
+        vm.newNote()
+        vm.open("id-existing")
+        advanceUntilIdle()
+        assertEquals("unsaved", vm.uiState.value.draft!!.title)
+        assertNull(vm.uiState.value.draft!!.id)
+    }
+
+    @Test
     fun cancelDiscardsDraftWithoutSaving() = runVmTest { vm, repo, handle ->
         advanceUntilIdle()
         vm.newNote()

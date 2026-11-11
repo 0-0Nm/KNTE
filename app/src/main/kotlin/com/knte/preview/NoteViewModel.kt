@@ -189,13 +189,18 @@ class NoteViewModel(
         viewModelScope.launch {
             try {
                 val bodyBytes = draft.body.utf8ByteCount()
-                if (draft.title.codePointCount(0, draft.title.length) > MAX_TITLE_CHARS || bodyBytes > MAX_STORABLE_BODY_BYTES) {
+                val normalizedTitle = draft.title.trim()
+                if (normalizedTitle.isEmpty()) {
+                    fail("标题不能为空，未保存；草稿已保留。")
+                    return@launch
+                }
+                if (normalizedTitle.codePointCount(0, normalizedTitle.length) > MAX_TITLE_CHARS || bodyBytes > MAX_STORABLE_BODY_BYTES) {
                     if (gen == saveGeneration) fail("正文超过 256 KiB 存储上限或标题过长，未保存；草稿已保留。")
                     return@launch
                 }
                 val now = System.currentTimeMillis()
                 if (draft.id == null) {
-                    withContext(ioDispatcher) { repository.create(draft.title, draft.body, now) }
+                    withContext(ioDispatcher) { repository.create(normalizedTitle, draft.body, now) }
                 } else {
                     // The handle revision is UI metadata only; re-read the real revision now.
                     val current = withContext(ioDispatcher) { repository.get(draft.id) }
@@ -205,7 +210,7 @@ class NoteViewModel(
                             "记录已被其他操作更新（当前 revision=${current.revision}，草稿 revision=${draft.revision}）；请重新打开后再编辑，未保存"
                         )
                     }
-                    withContext(ioDispatcher) { repository.update(draft.id, current.revision, draft.title, draft.body, now) }
+                    withContext(ioDispatcher) { repository.update(draft.id, current.revision, normalizedTitle, draft.body, now) }
                 }
                 if (gen != saveGeneration) return@launch
                 // Only a successful repository return clears the draft; nothing is claimed as saved early.
@@ -310,7 +315,7 @@ class NoteViewModel(
 
         if (!restorable) {
             // Body was deliberately never written to the handle: do not claim the draft is restorable.
-            savedStateHandle.remove(KEY_DRAFT_BODY)
+            savedStateHandle.remove<String>(KEY_DRAFT_BODY)
             _uiState.update {
                 it.copy(
                     draft = null,
@@ -348,17 +353,17 @@ class NoteViewModel(
         if (draft.restorable) {
             savedStateHandle[KEY_DRAFT_BODY] = draft.body
         } else {
-            savedStateHandle.remove(KEY_DRAFT_BODY)
+            savedStateHandle.remove<String>(KEY_DRAFT_BODY)
         }
     }
 
     private fun clearDraftHandle() {
-        savedStateHandle.remove(KEY_DRAFT_ID)
-        savedStateHandle.remove(KEY_DRAFT_TITLE)
-        savedStateHandle.remove(KEY_DRAFT_BODY)
-        savedStateHandle.remove(KEY_DRAFT_REVISION)
-        savedStateHandle.remove(KEY_DRAFT_RESTORABLE)
-        savedStateHandle.remove(KEY_DRAFT_BODY_BYTES)
+        savedStateHandle.remove<String>(KEY_DRAFT_ID)
+        savedStateHandle.remove<String>(KEY_DRAFT_TITLE)
+        savedStateHandle.remove<String>(KEY_DRAFT_BODY)
+        savedStateHandle.remove<String>(KEY_DRAFT_REVISION)
+        savedStateHandle.remove<Boolean>(KEY_DRAFT_RESTORABLE)
+        savedStateHandle.remove<Int>(KEY_DRAFT_BODY_BYTES)
     }
 
     private fun updateDraft(transform: (NoteDraft) -> NoteDraft) {
