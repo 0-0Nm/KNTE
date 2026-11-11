@@ -292,7 +292,7 @@ class AccountingViewModelTest {
     }
 
     @Test
-    fun reportsAreExactCentsAndCategoryComplete() = runVm { vm, ledger, _ ->
+    fun reportsAreExactCentsAndCategoryComplete() = runVm { vm, ledger, _, _ ->
         advanceUntilIdle()
         vm.newEntry()
         vm.dateChanged("2026-11-01")
