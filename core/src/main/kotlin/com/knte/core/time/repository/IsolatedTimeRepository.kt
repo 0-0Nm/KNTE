@@ -272,6 +272,9 @@ class IsolatedTimeRepository private constructor(
         require(!Files.isSymbolicLink(root) && root.toFile().canonicalFile.toPath() == root) {
             "TIME_STORE_ROOT_CHANGED"
         }
+        require(!Files.exists(root.resolve("$FILE_NAME.pending"), LinkOption.NOFOLLOW_LINKS)) {
+            "TIME_PENDING_REVIEW_REQUIRED"
+        }
         Files.newDirectoryStream(root).use { stream ->
             for (entry in stream) {
                 val name = entry.fileName.toString()
