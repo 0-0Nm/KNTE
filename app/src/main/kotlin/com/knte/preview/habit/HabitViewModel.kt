@@ -626,7 +626,7 @@ private fun nowStamp(): String = HabitCodec.stamp(LocalDateTime.now())
 /** 严格整数目标天数：仅 0-9 数字、1..3650；不猜、不补默认值、不接受小数与符号。 */
 internal fun parseTargetDays(text: String): Int? {
     if (text.isEmpty() || text.length > 4) return null
-    if (!text.all { it in '0'..'9' }) return null
+    if (!text.matches(Regex("[1-9][0-9]{0,3}"))) return null
     val value = text.toLongOrNull() ?: return null
     if (value !in 1L..3650L) return null
     return value.toInt()
