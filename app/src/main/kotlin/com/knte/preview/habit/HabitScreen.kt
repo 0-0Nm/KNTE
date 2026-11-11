@@ -311,8 +311,8 @@ private fun bodyFor(c: HabitConfirmation): String = when (c.op) {
     "restore" -> "恢复 ${c.habitName}：历史记录原样保留，之后可继续打卡。"
     else -> {
         val today = LocalDate.now().toString()
-        val when = if (c.date == today) "今天 $today" else "补记 ${c.date.orEmpty()}"
-        "习惯：${c.habitName}\n日期：$when\n结果：${if (c.done == true) "完成" else "未完成"}" +
+        val dateLabel = if (c.date == today) "今天 $today" else "补记 ${c.date.orEmpty()}"
+        "习惯：${c.habitName}\n日期：$dateLabel\n结果：${if (c.done == true) "完成" else "未完成"}" +
             (c.note?.let { "\n备注：$it" } ?: "")
     }
 }
