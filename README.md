@@ -21,3 +21,6 @@ A CI success is host-test/build evidence, not Android device/lifecycle acceptanc
 - No old evidence/archive/cache/build folders are imported.
 
 See `docs/ARCHITECTURE.md` and `docs/MIGRATION.md`.
+
+## First verified preview
+Cloud run `42955498690` passed for source `ebc9f6a0ab8096ed9e6e3ba394292860857b3155`; 21 host tests and debug APK build passed. Device acceptance is **not performed**. See `docs/FIRST_PREVIEW_ASSESSMENT.md` for scope, artifact identity and next milestones. Later documentation-only commits do not change that compiled-source identity.
