@@ -340,4 +340,12 @@ class IsolatedTimeRepositoryTest {
         assertTrue(api.snapshot().events.isEmpty())
     }
 
+    @Test fun everyNewAppendDeclaresDeviceClockUnverified() = fixture { root ->
+        val api = TimeLedgerApi(repo(root))
+        val p = api.planStart("clock-e", "t-clock", "2026-10-23", "09:00", "clock")
+        val saved = api.commit(p, p.confirmation)
+        assertEquals("unverified", saved.events.single().atTrust)
+        assertTrue(saved.events.single().encode().contains("\"at_trust\":\"unverified\""))
+    }
+
 }

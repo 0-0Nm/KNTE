@@ -91,4 +91,11 @@ class TimeEventCodecTest {
     private fun rejects(raw: String) {
         try { TimeEventCodec.parse(raw); fail("expected rejection: $raw") } catch (e: Exception) { }
     }
+    @Test fun existingClockTrustSurvivesRoundTrip() {
+        val raw = """{"op":"stop","id":"t-a1","end":"10:30","ts":"2026-10-23T10:30:02","at_trust":"unverified"}"""
+        val parsed = TimeEventCodec.parse(raw)
+        assertEquals("unverified", parsed.atTrust)
+        assertEquals(raw, parsed.encode())
+    }
+
 }

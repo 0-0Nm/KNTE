@@ -136,7 +136,7 @@ class IsolatedTimeRepository private constructor(
         require(before.events.size < MAX_EVENTS) { "TIME_EVENT_CAPACITY" }
         require(before.bytes.size + 1 <= MAX_FILE_BYTES) { "TIME_FILE_CAPACITY" }
         // Round-trip through the strict codec before validating projection/writing.
-        val stamped = TimeEventCodec.parse(event.copy(ts = now).encode())
+        val stamped = TimeEventCodec.parse(event.copy(ts = now, atTrust = "unverified").encode())
         validate(stamped, before, now)
         val line = stamped.encode()
         require(line.indexOf('\n') < 0 && line.indexOf('\r') < 0) { "TIME_EVENT_MULTILINE" }

@@ -10,7 +10,8 @@ data class TimeEvent(
     val eventId: String,
     val ts: String,
     val fields: Map<String, TimeJson.Value>,
-    val unknownKeys: List<Pair<String, TimeJson.Value>>
+    val unknownKeys: List<Pair<String, TimeJson.Value>>,
+    val atTrust: String? = null
 ) {
     /** Field lookup that does not guess: null means "key absent". */
     fun field(name: String): TimeJson.Value? = fields[name]
@@ -30,6 +31,7 @@ data class TimeEvent(
         fields.forEach { (k, v) -> entries += k to v }
         unknownKeys.forEach { (k, v) -> entries += k to v }
         entries += "ts" to TimeJson.Value.Str(ts)
+        atTrust?.let { entries += "at_trust" to TimeJson.Value.Str(it) }
         return TimeJson.Value.Obj(entries)
     }
 }
@@ -121,7 +123,7 @@ object TimeEventCodec {
                 fields["to"] = TimeJson.Value.Str(TimeFields.limited(requireStr(fields, "to"), 100, true))
             }
         }
-        return TimeEvent(op, eventId, ts, fields, unknown.toList())
+        return TimeEvent(op, eventId, ts, fields, unknown.toList(), map["at_trust"]?.let { TimeJsonValues.str(it) })
     }
 
     private fun amendValue(field: String, value: TimeJson.Value): TimeJson.Value = when (field) {
@@ -152,7 +154,7 @@ object TimeEventCodec {
         ts: LocalDateTime,
         fields: Map<String, TimeJson.Value>,
         unknownKeys: List<Pair<String, TimeJson.Value>> = emptyList()
-    ): String = TimeEvent(op, eventId, stamp(ts), fields, unknownKeys).encode()
+    ): String = TimeEvent(op, eventId, stamp(ts), fields, unknownKeys, "unverified").encode()
 
     fun stamp(time: LocalDateTime): String =
         time.format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss", Locale.ROOT))
