@@ -264,6 +264,30 @@ class NoteViewModelTest {
     }
 
     @Test
+    fun cancellingDraftLeavesPreviouslySavedRecordUntouched() = runVmTest { vm, repo, _ ->
+        repo.seed("id-existing", "stored", "original")
+        advanceUntilIdle()
+        vm.open("id-existing")
+        advanceUntilIdle()
+        vm.onBodyChange("unsaved changed")
+        vm.cancel()
+        assertNull(vm.uiState.value.draft)
+        assertEquals("original", repo.notes.single().body)
+        assertEquals(0, repo.updateCalls)
+    }
+
+    @Test
+    fun successfulReloadFinishesSavingNotice() = runVmTest { vm, _, _ ->
+        advanceUntilIdle()
+        vm.newNote()
+        vm.onTitleChange("synthetic")
+        vm.save()
+        advanceUntilIdle()
+        assertEquals("已保存并重新读取。", vm.uiState.value.notice)
+        assertEquals(NotesStatus.Ready, vm.uiState.value.status)
+    }
+
+    @Test
     fun cancelDiscardsDraftWithoutSaving() = runVmTest { vm, repo, handle ->
         advanceUntilIdle()
         vm.newNote()

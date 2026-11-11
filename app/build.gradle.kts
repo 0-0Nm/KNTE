@@ -7,11 +7,11 @@ android {
     namespace = "com.knte.preview"
     compileSdk = 35
     defaultConfig {
-        applicationId = "com.knte.preview"
+        applicationId = "com.knte.preview.next"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-preview1"
+        versionCode = 2
+        versionName = "0.1.0-preview2"
     }
     buildFeatures { compose = true }
     compileOptions {

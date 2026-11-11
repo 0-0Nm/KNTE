@@ -1,6 +1,6 @@
 # First-device acceptance (not executed)
 
-Package `com.knte.preview` must coexist with the Java reference package. Installing is a separate authorization, never a CI side effect.
+Corrected package `com.knte.preview.next` must coexist with the Java reference package. Installing is a separate authorization, never a CI side effect.
 
 Use synthetic notes only. Do not grant external storage, select a Vault, input credentials or restore real records.
 
@@ -16,3 +16,5 @@ Use synthetic notes only. Do not grant external storage, select a Vault, input c
 10. Record cold start, memory and rendering observations; do not infer them from Kotlin or Compose adoption.
 
 Results must distinguish screenshot/UI-node observation, independent file/repository evidence and JVM test evidence.
+
+Stable internal signing certificate fingerprint is recorded in private task evidence; private key/password never belong in repository or artifacts. ATVSX display re-creation is not equivalent to ordinary rotation; report such results separately.

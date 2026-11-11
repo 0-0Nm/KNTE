@@ -97,7 +97,7 @@ class NoteViewModel(
                 draft = draft,
                 status = NotesStatus.Ready,
                 error = null,
-                notice = "新建草稿尚未保存；只有点击「保存」且仓库返回成功才算已保存。",
+                notice = "新建草稿尚未保存。",
             )
         }
     }
@@ -168,7 +168,7 @@ class NoteViewModel(
                         draft = draft,
                         status = NotesStatus.Ready,
                         error = null,
-                        notice = "已载入已保存记录；SavedStateHandle 中的 revision 只是 UI 元数据，保存前会重新读取真实 revision 做 CAS 校验。",
+                        notice = "已打开记录，修改后请保存。",
                     )
                 }
             } catch (cancelled: CancellationException) {
@@ -220,7 +220,7 @@ class NoteViewModel(
                         pending = null,
                         draft = null,
                         error = null,
-                        notice = "仓库已返回成功；正在重新读取列表确认落盘结果。",
+                        notice = "保存完成，正在重读。",
                     )
                 }
                 reloadInternal(initial = false)
@@ -282,6 +282,7 @@ class NoteViewModel(
                         notes = notes,
                         status = if (notes.isEmpty()) NotesStatus.Empty else NotesStatus.Ready,
                         error = null,
+                        notice = if (it.notice == "保存完成，正在重读。") "已保存并重新读取。" else it.notice,
                     )
                 }
             } catch (cancelled: CancellationException) {
