@@ -3,7 +3,6 @@ package com.knte.preview
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.material3.MaterialTheme
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.createSavedStateHandle
@@ -12,7 +11,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.knte.core.notes.Note
 import com.knte.core.notes.NoteRepository
 import com.knte.core.notes.FileNoteRepository
-import com.knte.preview.ui.NotesScreen
+import com.knte.core.diary.IsolatedDiaryRepository
+import com.knte.preview.diary.DiaryViewModel
 import java.io.File
 
 /** Separate app ID and private folder. Never opens the old app or any external Vault. */
@@ -36,11 +36,20 @@ class MainActivity : ComponentActivity() {
                 return NoteViewModel(repository, extras.createSavedStateHandle()) as T
             }
         }
-        setContent {
-            MaterialTheme {
-                val stateHolder: NoteViewModel = viewModel(factory = factory)
-                NotesScreen(stateHolder)
+        val isolatedStorage by lazy {
+            IsolatedDiaryRepository(File(filesDir.canonicalFile, "isolated-diary-contract-v1"))
+        }
+        val diaryFactory = object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
+                require(modelClass.isAssignableFrom(DiaryViewModel::class.java))
+                @Suppress("UNCHECKED_CAST")
+                return DiaryViewModel({ isolatedStorage }, extras.createSavedStateHandle()) as T
             }
+        }
+        setContent {
+            val stateHolder: NoteViewModel = viewModel(factory = factory)
+            val diaryHolder: DiaryViewModel = viewModel(factory = diaryFactory)
+            ProductRoot(stateHolder, diaryHolder)
         }
     }
 }
