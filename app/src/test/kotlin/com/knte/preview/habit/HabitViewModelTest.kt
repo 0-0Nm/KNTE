@@ -190,10 +190,12 @@ class HabitViewModelTest {
             assertNotNull(vm.state.value.error)
         }
         assertEquals(0, api.snapshot().eventCount)
-        assertEquals("", vm.state.value.draft?.targetDaysText)
-        // an out-of-contract text is rejected at input time and never reaches the plan
+        // Numeric draft stays editable even when invalid for saving; never erase user input.
+        assertEquals("007", vm.state.value.draft?.targetDaysText)
+        // Rejected nonnumeric input preserves the last draft and cannot create a plan.
         vm.targetDaysChanged("abc")
-        assertEquals("", vm.state.value.draft?.targetDaysText)
+        assertEquals("007", vm.state.value.draft?.targetDaysText)
+        assertNull(vm.state.value.confirmation)
         assertNotNull(vm.state.value.notice)
     }
 
