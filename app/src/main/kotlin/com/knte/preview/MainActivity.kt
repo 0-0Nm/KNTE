@@ -13,6 +13,11 @@ import com.knte.core.notes.NoteRepository
 import com.knte.core.notes.FileNoteRepository
 import com.knte.core.diary.IsolatedDiaryRepository
 import com.knte.preview.diary.DiaryViewModel
+import com.knte.preview.time.TimeViewModel
+import com.knte.preview.accounting.AccountingViewModel
+import com.knte.core.accounting.IsolatedAccountingLedger
+import com.knte.core.time.repository.IsolatedTimeRepository
+import com.knte.core.time.repository.TimeLedgerApi
 import java.io.File
 
 /** Separate app ID and private folder. Never opens the old app or any external Vault. */
@@ -46,10 +51,32 @@ class MainActivity : ComponentActivity() {
                 return DiaryViewModel({ isolatedStorage }, extras.createSavedStateHandle()) as T
             }
         }
+        val timeStorage by lazy {
+            TimeLedgerApi(IsolatedTimeRepository.open(File(filesDir.canonicalFile, "isolated-time-contract-v1")))
+        }
+        val timeFactory = object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
+                require(modelClass.isAssignableFrom(TimeViewModel::class.java))
+                @Suppress("UNCHECKED_CAST")
+                return TimeViewModel({ timeStorage }, extras.createSavedStateHandle()) as T
+            }
+        }
+        val accountingStorage by lazy {
+            IsolatedAccountingLedger(File(filesDir.canonicalFile, "isolated-accounting-contract-v1"))
+        }
+        val accountingFactory = object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
+                require(modelClass.isAssignableFrom(AccountingViewModel::class.java))
+                @Suppress("UNCHECKED_CAST")
+                return AccountingViewModel({ accountingStorage }, extras.createSavedStateHandle()) as T
+            }
+        }
         setContent {
             val stateHolder: NoteViewModel = viewModel(factory = factory)
             val diaryHolder: DiaryViewModel = viewModel(factory = diaryFactory)
-            ProductRoot(stateHolder, diaryHolder)
+            val timeHolder: TimeViewModel = viewModel(factory = timeFactory)
+            val accountingHolder: AccountingViewModel = viewModel(factory = accountingFactory)
+            ProductRoot(stateHolder, diaryHolder, timeHolder, accountingHolder)
         }
     }
 }

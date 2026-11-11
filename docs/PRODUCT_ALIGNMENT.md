@@ -28,3 +28,10 @@ The app entry is being integrated. This is a partial product slice, not whole-pr
 
 First improve and verify isolated format safety; then review a user-authorized synthetic SAF bridge.
 Never relabel isolated files as a connected Vault or make unimplemented buttons report success.
+
+## Isolated business additions (source; CI/device status reported separately)
+Time C-3 events and manual accounting now have app-private validation repositories and UI adapters.
+Time supports confirmed start/stop plus pure amend/rename projections; no notifications, overlay timer,
+repeat scheduling or formal source authority is claimed. Accounting supports confirmed manual entries,
+exact cents, ledger/month/category views; AI parsing and reversal writes remain unavailable.
+These additions do not connect real `.knte` or Vault data and do not close all product gaps above.

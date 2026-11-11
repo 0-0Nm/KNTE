@@ -56,6 +56,8 @@ fun ProductShell(
     onOpenPreviewTool: (() -> Unit)? = null,
     canLeaveContent: Boolean = true,
     onNavigateAway: ((continueNavigation: () -> Unit) -> Unit)? = null,
+    timeContent: (@Composable () -> Unit)? = null,
+    accountingContent: (@Composable (Section) -> Unit)? = null,
 ) {
     var state by rememberSaveable(stateSaver = ShellStateSaver) { mutableStateOf(ShellState()) }
     var beforeQuiet by rememberSaveable(stateSaver = ShellStateSaver) { mutableStateOf(ShellState()) }
@@ -63,7 +65,9 @@ fun ProductShell(
     var settingsPage by rememberSaveable { mutableStateOf<String?>(null) }
     var leaveNotice by rememberSaveable { mutableStateOf(false) }
     val route = state.route
-    val hostsContent = toolOpen || (route.isDiary && diaryContent != null)
+    val isTime = route.module == Module.MEMORY && route.category == MemoryCategory.TIME && route.section == Section.TIME
+    val isAccounting = route.module == Module.MEMORY && route.category == MemoryCategory.ACCOUNTING
+    val hostsContent = toolOpen || (route.isDiary && diaryContent != null) || (isTime && timeContent != null) || (isAccounting && accountingContent != null)
 
     fun leave(proceed: () -> Unit) {
         if (!hostsContent) { leaveNotice = false; proceed(); return }
@@ -177,7 +181,11 @@ fun ProductShell(
                         y += spacing
                     }
                 }) {
-                    if (availability(route, diaryContent != null) == ProductAvailability.Available) {
+                    if (isAccounting && accountingContent != null) {
+                        accountingContent(requireNotNull(route.section))
+                    } else if (isTime && timeContent != null) {
+                        timeContent()
+                    } else if (availability(route, diaryContent != null) == ProductAvailability.Available) {
                         diaryContent?.invoke()
                     } else {
                         NotConnectedPage(route, state.observeMode) { state = state.open(Overlay.MODULES) }

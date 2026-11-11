@@ -1,0 +1,10 @@
+{"op":"start","event_id":"e-0001","id":"t-aaaa0001","date":"2026-10-23","start":"09:00","project":"晨读","tags":["语文"],"note":"合成样例","repeat_id":"r-001","ts":"2026-10-23T09:00:01"}
+{"op":"stop","event_id":"e-0002","id":"t-aaaa0001","end":"10:30","ts":"2026-10-23T10:30:02"}
+{"op":"amend","event_id":"e-0003","target":"t-aaaa0001","field":"start","value":"09:05","reason":"记早了","ts":"2026-10-23T10:31:00"}
+{"op":"start","event_id":"e-0004","id":"t-aaaa0002","date":"2026-10-23","start":"23:30","project":"夜读","ts":"2026-10-23T23:30:00"}
+{"op":"stop","event_id":"e-0005","id":"t-aaaa0002","end":"00:45","end_date":"2026-10-24","ts":"2026-10-24T00:45:00"}
+{"op":"start","event_id":"e-0006","id":"t-aaaa0003","date":"2026-10-24","start":"08:00","project":"跑步","ts":"2026-10-24T08:00:00"}
+{"op":"amend","event_id":"e-0007","target":"t-missing01","field":"note","value":"多端时序先到","ts":"2026-10-24T09:00:00"}
+{"op":"stop","event_id":"e-0008","id":"t-orphan001","end":"10:00","ts":"2026-10-24T10:00:00"}
+{"op":"rename_project","event_id":"e-0009","from":"晨读","to":"晨间阅读","ts":"2026-10-24T12:00:00"}
+{"op":"start","event_id":"e-0010","id":"t-aaaa0004","date":"2026-10-24","start":"10:00","project":"物理","unknown_future_key":{"nested":[1,2,{"deep":true}]},"ts":"2026-10-24T10:00:00"}
