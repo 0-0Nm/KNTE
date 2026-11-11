@@ -24,7 +24,7 @@ fun ReadingScreen(viewModel:ReadingViewModel,chooseBook:()->Unit) {
         text={ LazyColumn(Modifier.heightIn(max=440.dp)) {
             items(s.book!!.toc,key={it.chapterId}) { item ->
                 TextButton(onClick={viewModel.chapter(item.chapterId);toc=false},enabled=!s.busy,
-                    modifier=Modifier.fillMaxWidth()) { Text("${item.ordinal+1}. ${item.title}") }
+                    modifier=Modifier.fillMaxWidth()) { Text("${item.ordinal}. ${item.title}") }
             }
         } },confirmButton={TextButton(onClick={toc=false}){Text("关闭")}})
     Column(Modifier.fillMaxSize().padding(horizontal=22.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {

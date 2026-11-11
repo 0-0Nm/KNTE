@@ -59,6 +59,7 @@ fun ProductShell(
     timeContent: (@Composable () -> Unit)? = null,
     accountingContent: (@Composable (Section) -> Unit)? = null,
     readingContent: (@Composable () -> Unit)? = null,
+    habitContent: (@Composable () -> Unit)? = null,
 ) {
     var state by rememberSaveable(stateSaver = ShellStateSaver) { mutableStateOf(ShellState()) }
     var beforeQuiet by rememberSaveable(stateSaver = ShellStateSaver) { mutableStateOf(ShellState()) }
@@ -68,8 +69,9 @@ fun ProductShell(
     val route = state.route
     val isTime = route.module == Module.MEMORY && route.category == MemoryCategory.TIME && route.section == Section.TIME
     val isLocalReading = route.module == Module.READING && route.section == Section.ASK && readingContent != null
+    val isHabit = route.module == Module.MEMORY && route.category == MemoryCategory.TIME && route.section == Section.HABITS
     val isAccounting = route.module == Module.MEMORY && route.category == MemoryCategory.ACCOUNTING
-    val hostsContent = toolOpen || (route.isDiary && diaryContent != null) || (isTime && timeContent != null) || (isAccounting && accountingContent != null)
+    val hostsContent = toolOpen || (route.isDiary && diaryContent != null) || (isTime && timeContent != null) || (isAccounting && accountingContent != null) || (isHabit && habitContent != null)
 
     fun leave(proceed: () -> Unit) {
         if (!hostsContent) { leaveNotice = false; proceed(); return }
@@ -183,7 +185,9 @@ fun ProductShell(
                         y += spacing
                     }
                 }) {
-                    if (isLocalReading && readingContent != null) {
+                    if (isHabit && habitContent != null) {
+                        habitContent()
+                    } else if (isLocalReading && readingContent != null) {
                         readingContent()
                     } else if (isAccounting && accountingContent != null) {
                         accountingContent(requireNotNull(route.section))

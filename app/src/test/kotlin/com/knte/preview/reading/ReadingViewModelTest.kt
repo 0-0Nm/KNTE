@@ -30,7 +30,7 @@ class ReadingViewModelTest {
     @Test fun initialHasNoFabricatedBook()=runVm{vm,_->assertNull(vm.state.value.book);assertFalse(vm.state.value.busy)}
     @Test fun selectBuildsRealTocAndExactChapterText()=runVm{vm,_->
         vm.select("a");advanceUntilIdle();val b=vm.state.value.book!!
-        assertEquals(2,b.toc.size);assertEquals("# First\nHello a\n",vm.state.value.chapterText)
+        assertEquals(2,b.toc.size);assertEquals(listOf(1,2),b.toc.map{it.ordinal});assertEquals("# First\nHello a\n",vm.state.value.chapterText)
         vm.chapter(b.toc[1].chapterId);assertEquals("# Second\nWorld\n",vm.state.value.chapterText)
     }
     @Test fun savePositionAndReopenRestoresSameChapter()=runVm{vm,_->

@@ -48,3 +48,11 @@ The reading/ask entry hosts a local TXT/Markdown reader: explicit system documen
 strict bounded UTF-8 import, real chapter index and original text, and explicit private chapter-position save.
 Books are not automatically copied or uploaded. This does not implement AI discussion, worlds,
 teachers, exercises, annotations or a complete bookshelf. PDF/EPUB and automatic cross-process restore are unsupported.
+
+## Habit and reference source slice (preview9)
+Habit creation/edit, confirmed daily checks, archive/restore and derived growth/heat views use an
+explicit private isolated define/check schema, not the formal check-only habits file. No reminders,
+Alarm or notification delivery are implemented by this slice.
+Reference weighting, scope, deterministic draw/replay and input binding have pure-domain tests;
+reference JSONL persistence, cross-file witnesses and conversation citation integration remain unimplemented.
+Book TOC numbering now uses the core's one-based ordinal without adding one again.

@@ -6,6 +6,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.knte.preview.habit.HabitScreen
+import com.knte.preview.habit.HabitViewModel
 import com.knte.preview.diary.DiaryScreen
 import com.knte.preview.diary.DiaryViewModel
 import com.knte.preview.reading.ReadingScreen
@@ -23,15 +25,16 @@ import com.knte.preview.ui.product.ProductShell
 
 /** Repository/VM state stays above route composition. Tool and diary never share a format. */
 @Composable
-fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel, accounting: AccountingViewModel, source: SourceViewModel, chooseSource: () -> Unit, reading: ReadingViewModel, chooseBook: () -> Unit) {
+fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel, accounting: AccountingViewModel, source: SourceViewModel, chooseSource: () -> Unit, reading: ReadingViewModel, chooseBook: () -> Unit, habit: HabitViewModel) {
     var showSource by remember { mutableStateOf(true) }
     val noteState by notes.uiState.collectAsStateWithLifecycle()
     val diaryState by diary.state.collectAsStateWithLifecycle()
     val timeState by time.state.collectAsStateWithLifecycle()
     val accountingState by accounting.state.collectAsStateWithLifecycle()
+    val habitState by habit.state.collectAsStateWithLifecycle()
     var pendingNavigation by remember { mutableStateOf<(() -> Unit)?>(null) }
     var busyNotice by remember { mutableStateOf(false) }
-    val busy = noteState.isBusy || diaryState.busy || timeState.busy || accountingState.busy
+    val busy = noteState.isBusy || diaryState.busy || timeState.busy || accountingState.busy || habitState.busy
     ProductShell(
         noteToolContent = { NotesScreen(notes) },
         diaryContent = {
@@ -50,21 +53,23 @@ fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel
             }
         },
         timeContent = { TimeScreen(time) },
+        habitContent = { HabitScreen(habit) },
         readingContent = { ReadingScreen(reading, chooseBook) },
         accountingContent = { section -> AccountingScreen(accounting, when (section) {
             Section.REPORTS -> AccountingSection.MONTH
             Section.STATISTICS -> AccountingSection.CATEGORY
             else -> AccountingSection.LEDGER
         }) },
-        canLeaveContent = !busy && noteState.draft == null && !diaryState.hasUnsavedChanges && !timeState.hasUnsavedChanges && !accountingState.hasUnsavedChanges,
+        canLeaveContent = !busy && noteState.draft == null && !diaryState.hasUnsavedChanges && !timeState.hasUnsavedChanges && !accountingState.hasUnsavedChanges && !habitState.hasUnsavedChanges,
         onNavigateAway = { continuation ->
             when {
-                notes.uiState.value.isBusy || diary.state.value.busy || time.state.value.busy || accounting.state.value.busy -> busyNotice = true
-                notes.uiState.value.draft != null || diary.state.value.hasUnsavedChanges || time.state.value.hasUnsavedChanges || accounting.state.value.hasUnsavedChanges -> pendingNavigation = continuation
+                notes.uiState.value.isBusy || diary.state.value.busy || time.state.value.busy || accounting.state.value.busy || habit.state.value.busy -> busyNotice = true
+                notes.uiState.value.draft != null || diary.state.value.hasUnsavedChanges || time.state.value.hasUnsavedChanges || accounting.state.value.hasUnsavedChanges || habit.state.value.hasUnsavedChanges -> pendingNavigation = continuation
                 else -> {
                     if (diary.state.value.draft != null) diary.discard()
                     if (time.state.value.draft != null) time.discard()
                     if (accounting.state.value.draft != null) accounting.discard()
+                    if (habit.state.value.draft != null) habit.discard()
                     continuation()
                 }
             }
@@ -81,13 +86,14 @@ fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel
         } },
         confirmButton = { TextButton(enabled = !busy, onClick = {
             val go = pendingNavigation; pendingNavigation = null
-            if (notes.uiState.value.isBusy || diary.state.value.busy || time.state.value.busy || accounting.state.value.busy) {
+            if (notes.uiState.value.isBusy || diary.state.value.busy || time.state.value.busy || accounting.state.value.busy || habit.state.value.busy) {
                 busyNotice = true
             } else {
                 if (notes.uiState.value.draft != null) notes.cancel()
                 if (diary.state.value.draft != null) diary.discard()
                     if (time.state.value.draft != null) time.discard()
                     if (accounting.state.value.draft != null) accounting.discard()
+                    if (habit.state.value.draft != null) habit.discard()
                 go?.invoke()
             }
         }) { Text("放弃草稿并离开") } },
