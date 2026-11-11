@@ -78,7 +78,14 @@ class ReferenceViewModel(private val factory:()->ReferenceStoreApi,
     fun prepareCreate() {
         val d=_state.value.draft ?: return
         if(_state.value.busy || _state.value.reviewRequired || _state.value.confirmation!=null)return
-        prepare(d.id,"创建${if(d.pool==ReferencePool.MEMO)"备忘" else "吃一堑"}：${d.title}") {
+        val summary = buildString {
+            append("创建").append(if(d.pool==ReferencePool.MEMO) "备忘" else "吃一堑")
+            append("：").append(d.title)
+            if(d.pool==ReferencePool.MEMO) append("\n期限：").append(d.due.ifEmpty { "无期限" })
+            else append("\n人工确认次数：").append(d.count)
+            append("\n正文：\n").append(d.body.ifEmpty { "（空正文）" })
+        }
+        prepare(d.id,summary) {
             val ts=stamp()
             if(d.pool==ReferencePool.MEMO) store().planCreateMemo(d.id,d.title,ts,due=d.due.ifEmpty{null},body=d.body.ifEmpty{null})
             else {
@@ -123,7 +130,12 @@ class ReferenceViewModel(private val factory:()->ReferenceStoreApi,
         }
     }
     fun dismissConfirmation()=cancelThen {}
-    fun discard()=cancelThen {clearDraft();_state.update{it.copy(draft=null,notice="草稿已放弃，已存记录未删除。")}}
+    /** Navigation continuation runs only after any durable cancellation succeeds. */
+    fun discard(afterDiscard: () -> Unit = {})=cancelThen {
+        clearDraft()
+        _state.update{it.copy(draft=null,notice="草稿已放弃，已存记录未删除。")}
+        afterDiscard()
+    }
     private fun cancelThen(next:()->Unit) {
         if(_state.value.busy)return
         val c=_state.value.confirmation

@@ -76,8 +76,9 @@ fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel
                     if (time.state.value.draft != null) time.discard()
                     if (accounting.state.value.draft != null) accounting.discard()
                     if (habit.state.value.draft != null) habit.discard()
-                    if (reference.state.value.draft != null) reference.discard()
-                    continuation()
+                    if (reference.state.value.draft != null || reference.state.value.confirmation != null)
+                        reference.discard { continuation() }
+                    else continuation()
                 }
             }
         },
@@ -101,8 +102,9 @@ fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel
                     if (time.state.value.draft != null) time.discard()
                     if (accounting.state.value.draft != null) accounting.discard()
                     if (habit.state.value.draft != null) habit.discard()
-                    if (reference.state.value.draft != null) reference.discard()
-                go?.invoke()
+                if (reference.state.value.draft != null || reference.state.value.confirmation != null)
+                    reference.discard { go?.invoke() }
+                else go?.invoke()
             }
         }) { Text("放弃草稿并离开") } },
         dismissButton = { TextButton(onClick = { pendingNavigation = null }) { Text("继续编辑") } })

@@ -56,4 +56,41 @@ class ReferenceViewModelTest {
     @Test fun draftRestoresWithoutApproval()=runVm(SavedStateHandle(mapOf("knte.isolated.reference.draft" to true,"knte.isolated.reference.pool" to "MEMO","knte.isolated.reference.id" to "m-12345678","knte.isolated.reference.title" to "unsaved"))){vm,f->
         advanceUntilIdle();assertEquals("unsaved",vm.state.value.draft?.title);assertNull(vm.state.value.confirmation);assertTrue(f().snapshot().entries.isEmpty())
     }
+    @Test fun navigationWaitsForDurableCancellationAndDraftClear()=runVm{vm,f->
+        advanceUntilIdle();vm.begin(ReferencePool.MEMO);vm.change(title="unsaved")
+        vm.prepareCreate();advanceUntilIdle()
+        val pending=vm.state.value.confirmation!!
+        var navigated=false
+        vm.discard { navigated=true }
+        assertFalse(navigated)
+        assertTrue(vm.state.value.busy)
+        advanceUntilIdle()
+        assertTrue(navigated);assertNull(vm.state.value.draft);assertNull(vm.state.value.confirmation)
+        assertTrue(f().snapshot().entries.isEmpty())
+        try {f().confirm(pending.plan,pending.plan.confirmation);fail("Cancelled plan must remain invalid")}
+        catch (_:Exception){}
+    }
+    @Test fun failedCancellationDoesNotRunNavigationContinuation()=runVm{vm,f->
+        advanceUntilIdle();vm.begin(ReferencePool.MEMO);vm.change(title="keep")
+        vm.prepareCreate();advanceUntilIdle()
+        // A separately confirmed copy cannot be reported as a successful cancellation.
+        val prepared=vm.state.value.confirmation!!
+        val external=f()
+        external.confirm(prepared.plan,prepared.plan.confirmation)
+        var navigated=false
+        vm.discard {navigated=true};advanceUntilIdle()
+        assertFalse(navigated);assertTrue(vm.state.value.reviewRequired)
+        assertEquals("keep",vm.state.value.draft?.title)
+    }
+
+    @Test fun confirmationDisplaysExactProposedTextAndDeadline()=runVm{vm,_->
+        advanceUntilIdle();vm.begin(ReferencePool.MEMO)
+        vm.change(title="review",body="Exact proposed body 中文",due="2026-12-01")
+        vm.prepareCreate();advanceUntilIdle()
+        val card=vm.state.value.confirmation!!
+        assertTrue(card.label.contains("Exact proposed body 中文"))
+        assertTrue(card.label.contains("2026-12-01"))
+        assertTrue(card.label.contains("review"))
+    }
+
 }
