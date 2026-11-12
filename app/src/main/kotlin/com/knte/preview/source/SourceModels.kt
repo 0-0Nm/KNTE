@@ -22,6 +22,7 @@ enum class SourcePermission { None, Granted, Lost }
 
 /** Stable machine codes. A failure is never reported as an empty/successful result. */
 object SourceCodes {
+    const val PERSIST_FAILED = "PERSIST_FAILED"
     const val PERMISSION_LOST = "PERMISSION_LOST"
     const val PERMISSION_NOT_GRANTED = "PERMISSION_NOT_GRANTED"
     const val QUERY_FAILED = "QUERY_FAILED"

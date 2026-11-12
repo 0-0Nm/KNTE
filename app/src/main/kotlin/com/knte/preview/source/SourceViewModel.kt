@@ -28,13 +28,16 @@ class SourceViewModel(private val source: ReadOnlyDiarySource,
         viewModelScope.launch {
             try {
                 lane.withLock {
-                    if (gen != generation) return@withLock
+                    // Always establish the persisted rollback baseline before queued writes,
+                    // even if a selection superseded startup before this coroutine ran.
                     val selected = withContext(ioDispatcher) { preferences.load() }
+                    val current = SourceSession(source)
+                    if (selected != null) current.bind(selected)
+                    session = current
                     if (gen != generation) return@withLock
                     if (selected == null) _state.value = SourceUiState()
                     else {
-                        val current = SourceSession(source); session = current
-                        _state.value = current.bind(selected).copy(busy = true)
+                        _state.value = current.uiState().copy(busy = true)
                         val result = withContext(ioDispatcher) { current.reload() }
                         if (gen == generation) _state.value = result.copy(busy = false)
                     }
@@ -45,14 +48,23 @@ class SourceViewModel(private val source: ReadOnlyDiarySource,
     /** Called after explicit selection and read-grant persistence, never grants permission itself. */
     fun select(root: SourceRoot) {
         val gen = ++generation
-        val next = SourceSession(source); session = next
-        _state.value = next.bind(root).copy(busy = true)
+        val next = SourceSession(source)
+        next.bind(root)
+        // Hide previous content while selecting; do not publish an uncommitted binding.
+        _state.value = SourceUiState(status = SourceStatus.Loading, busy = true)
         viewModelScope.launch {
             try {
                 lane.withLock {
                     if (gen != generation) return@withLock
                     // A newer selection/forget waits for this physical save to finish, then wins.
-                    withContext(ioDispatcher) { preferences.save(root) }
+                    try {
+                        withContext(ioDispatcher) { preferences.save(root) }
+                    } catch (e: Exception) {
+                        persistenceFailure(gen, e, "目录切换未保存；保留原来源，可重新选择。")
+                        return@withLock
+                    }
+                    // Even an obsolete physical save becomes the rollback baseline until a newer save wins.
+                    session = next
                     if (gen != generation) return@withLock
                     val result = withContext(ioDispatcher) { next.reload() }
                     if (gen == generation) _state.value = result.copy(busy = false)
@@ -81,13 +93,20 @@ class SourceViewModel(private val source: ReadOnlyDiarySource,
     fun closeDocument() { if (!_state.value.busy) _state.value = session.closeDocument() }
     fun forget() {
         val gen = ++generation
-        val next = SourceSession(source); session = next
-        _state.value = next.forget().copy(busy = true)
+        val next = SourceSession(source)
+        next.forget()
+        _state.value = SourceUiState(status = SourceStatus.Loading, busy = true)
         viewModelScope.launch {
             try {
                 lane.withLock {
                     if (gen != generation) return@withLock
-                    withContext(ioDispatcher) { preferences.save(null) }
+                    try {
+                        withContext(ioDispatcher) { preferences.save(null) }
+                    } catch (e: Exception) {
+                        persistenceFailure(gen, e, "断开来源未保存；保留原绑定，请重新断开。")
+                        return@withLock
+                    }
+                    session = next
                     if (gen == generation) _state.value = next.uiState()
                 }
             } catch (e: Exception) { failure(gen, e, "已清除显示内容，但断开绑定未持久化，请重试") }
@@ -95,6 +114,14 @@ class SourceViewModel(private val source: ReadOnlyDiarySource,
     }
     fun selectionFailed() {
         _state.value = _state.value.copy(notice = "目录选择未完成或未取得只读授权，来源未切换。")
+    }
+    private fun persistenceFailure(gen: Long, e: Exception, text: String) {
+        if (e is CancellationException) throw e
+        if (gen == generation) {
+            val prior = session.uiState()
+            _state.value = prior.copy(busy = false, opened = null, notice = null,
+                status = SourceStatus.Error(SourceCodes.PERSIST_FAILED, text, prior.entries, prior.totalBytes))
+        }
     }
     private fun failure(gen: Long, e: Exception, text: String) {
         if (e is CancellationException) throw e

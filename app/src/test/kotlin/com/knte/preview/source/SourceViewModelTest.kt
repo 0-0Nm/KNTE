@@ -16,7 +16,12 @@ class SourceViewModelTest {
     private class Prefs(var selected: SourceRoot? = null) : SourcePreferences {
         var onSave: ((SourceRoot?) -> Unit)? = null
         var fail = false
-        override fun load() = selected
+        var onLoad: (() -> Unit)? = null
+        override fun load(): SourceRoot? {
+            val persisted = selected
+            onLoad?.invoke()
+            return persisted
+        }
         override fun save(root: SourceRoot?) {
             check(!fail) { "injected binding failure" }
             onSave?.invoke(root);selected = root
@@ -103,4 +108,62 @@ class SourceViewModelTest {
         vm.closeDocument();assertNull(vm.state.value.opened)
         vm.reload();vm.reload();advanceUntilIdle();assertEquals(root("a").identity,vm.state.value.rootIdentity)
     }
+    @Test fun failedSelectionRestoresLastPersistedRootAndReloadNeverUsesRejectedRoot()=runVm(root("a")) { vm,_,prefs ->
+        advanceUntilIdle();prefs.fail=true;vm.select(root("b"));advanceUntilIdle()
+        assertEquals(root("a"),prefs.selected);assertEquals(root("a").identity,vm.state.value.rootIdentity)
+        assertEquals(SourceCodes.PERSIST_FAILED,(vm.state.value.status as SourceStatus.Error).code)
+        vm.reload();advanceUntilIdle()
+        assertEquals(root("a").identity,vm.state.value.entries.single().rootIdentity)
+    }
+    @Test fun failedForgetKeepsRetryableRootAndCanLaterDisconnect()=runVm(root("a")) { vm,_,prefs ->
+        advanceUntilIdle();prefs.fail=true;vm.forget();advanceUntilIdle()
+        assertTrue(vm.state.value.hasRoot);assertEquals(root("a"),prefs.selected)
+        assertEquals(SourceCodes.PERSIST_FAILED,(vm.state.value.status as SourceStatus.Error).code)
+        assertNull(vm.state.value.notice)
+        prefs.fail=false;vm.forget();advanceUntilIdle()
+        assertNull(prefs.selected);assertTrue(vm.state.value.status is SourceStatus.NotSelected)
+    }
+    @Test fun savedBindingWithProviderFailureRemainsNewPersistedRoot()=runVm(root("a")) { vm,src,prefs ->
+        advanceUntilIdle();src.fail=true;vm.select(root("b"));advanceUntilIdle()
+        assertEquals(root("b"),prefs.selected);assertEquals(root("b").identity,vm.state.value.rootIdentity)
+        assertEquals(SourceCodes.QUERY_FAILED,(vm.state.value.status as SourceStatus.Error).code)
+    }
+    @Test fun staleSaveSuccessThenLatestSaveFailureRollsBackToPhysicalWinner()=runVm { vm,_,prefs ->
+        advanceUntilIdle()
+        prefs.onSave={r -> if(r==root("a")){prefs.onSave=null;vm.select(root("b"));prefs.fail=true}}
+        vm.select(root("a"));advanceUntilIdle()
+        assertEquals(root("a"),prefs.selected)
+        assertEquals(root("a").identity,vm.state.value.rootIdentity)
+        assertEquals(SourceCodes.PERSIST_FAILED,(vm.state.value.status as SourceStatus.Error).code)
+    }
+
+    @Test fun failedSelectionBeforeStartupRunsKeepsPersistedBaseline()=runVm(root("a")) { vm,_,prefs ->
+        prefs.fail=true
+        vm.select(root("b"))
+        advanceUntilIdle()
+        assertEquals(root("a"),prefs.selected)
+        assertEquals(root("a").identity,vm.state.value.rootIdentity)
+        assertEquals(SourceCodes.PERSIST_FAILED,(vm.state.value.status as SourceStatus.Error).code)
+        vm.reload();advanceUntilIdle()
+        assertEquals(root("a").identity,vm.state.value.entries.single().rootIdentity)
+    }
+    @Test fun failedForgetBeforeStartupRunsKeepsPersistedBaseline()=runVm(root("a")) { vm,_,prefs ->
+        prefs.fail=true
+        vm.forget()
+        advanceUntilIdle()
+        assertEquals(root("a"),prefs.selected)
+        assertEquals(root("a").identity,vm.state.value.rootIdentity)
+        assertFalse(vm.state.value.busy)
+        assertEquals(SourceCodes.PERSIST_FAILED,(vm.state.value.status as SourceStatus.Error).code)
+    }
+    @Test fun selectionDuringInitialLoadFailureRetainsLoadedBaseline()=runVm(root("a")) { vm,_,prefs ->
+        prefs.onLoad={prefs.onLoad=null;prefs.fail=true;vm.select(root("b"))}
+        advanceUntilIdle()
+        assertEquals(root("a"),prefs.selected)
+        assertEquals(root("a").identity,vm.state.value.rootIdentity)
+        assertEquals(SourceCodes.PERSIST_FAILED,(vm.state.value.status as SourceStatus.Error).code)
+        vm.reload();advanceUntilIdle()
+        assertEquals(root("a").identity,vm.state.value.entries.single().rootIdentity)
+    }
+
 }
