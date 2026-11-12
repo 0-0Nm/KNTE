@@ -299,6 +299,89 @@ class ModelConfigViewModelTest {
         }
     }
 
+    // -------------------------------------- page re-entry clears only stale notice/saved
+
+    @Test
+    fun pageReentryAfterCancelDropsStaleNoticeButKeepsSavedFields() {
+        withFake(savedSnapshot()) { vm, repo ->
+            vm.onModelChanged("m-typed")
+            vm.onCredentialChanged("synthetic-key")
+            vm.cancel(); advance()
+            assertNotNull(vm.state.value.notice)              // banner right after cancel
+            vm.onPageEntered()                                // the user re-enters the page
+            assertNull(vm.state.value.notice)                 // stale banner is gone
+            assertFalse(vm.state.value.saved)
+            assertEquals(openAiEndpoint, vm.state.value.endpoint) // stored fields kept
+            assertEquals("m-old", vm.state.value.model)
+            assertEquals(CredentialPresence.Present, vm.state.value.credentialPresence)
+            assertFalse(vm.state.value.draftCredentialPending)
+            assertTrue(repo.commitDigests.isEmpty())           // still no write, no reload
+        }
+    }
+
+    @Test
+    fun pageReentryAfterSuccessfulSaveClearsSavedAndNoticeButKeepsInputs() {
+        withFake(savedSnapshot()) { vm, repo ->
+            vm.onModelChanged("m-new")
+            vm.save(); advance()
+            assertTrue(vm.state.value.saved)
+            assertNotNull(vm.state.value.notice)
+            vm.onPageEntered()
+            assertNull(vm.state.value.notice)
+            assertFalse(vm.state.value.saved)
+            assertEquals("m-new", vm.state.value.model)            // committed input kept
+            assertEquals(openAiEndpoint, vm.state.value.endpoint)
+            assertEquals("m-new", vm.state.value.savedModel)      // no restore, no reload
+            assertFalse(vm.state.value.draftCredentialPending)
+            assertEquals(1, repo.commitDigests.size)              // exactly one commit
+        }
+    }
+
+    @Test
+    fun pageReentryKeepsErrorAndPendingSecretDraftAndRetryCommitsSameKey() {
+        withFake(savedSnapshot(), {
+            commitFailure = java.io.IOException("simulated commit failure")
+        }) { vm, repo ->
+            vm.onModelChanged("m-new")
+            vm.onCredentialChanged("synthetic-key")
+            vm.save(); advance()
+            assertNotNull(vm.state.value.error)
+            assertTrue(vm.state.value.draftCredentialPending)
+            val epochBefore = vm.state.value.secretResetEpoch
+            vm.onPageEntered()                                    // re-enter with error shown
+            assertNotNull(vm.state.value.error)                    // error survives re-entry
+            assertTrue(vm.state.value.draftCredentialPending)     // pending draft survives
+            assertEquals(epochBefore, vm.state.value.secretResetEpoch) // no secret reset
+            assertEquals("m-new", vm.state.value.model)
+
+            // Retry WITHOUT retyping still commits the very same key after re-entry.
+            repo.commitFailure = null
+            vm.save(); advance()
+            assertTrue(vm.state.value.saved)
+            assertEquals(listOf(sha256("synthetic-key")), repo.commitDigests)
+        }
+    }
+
+    @Test
+    fun pageReentryWhileBusyKeepsBusyAndDraftAndLaterClearsNotice() {
+        withFake(savedSnapshot()) { vm, repo ->
+            vm.onModelChanged("m-busy")
+            vm.onCredentialChanged("synthetic-key")
+            vm.save()
+            assertTrue(vm.state.value.busy)                       // busy before dispatch
+            vm.onPageEntered()                                   // re-enter mid-flight
+            assertTrue(vm.state.value.busy)                       // busy NOT resolved
+            assertTrue(vm.state.value.draftCredentialPending)     // draft NOT cleared
+            assertEquals("m-busy", vm.state.value.model)          // inputs untouched
+            advance()
+            assertTrue(vm.state.value.saved)
+            assertEquals(listOf(sha256("synthetic-key")), repo.commitDigests)
+            vm.onPageEntered()                                   // re-entry after completion
+            assertFalse(vm.state.value.saved)
+            assertNull(vm.state.value.notice)
+        }
+    }
+
     // ---------------------------------------- read failure is an error, not "empty"
 
     @Test

@@ -57,6 +57,15 @@ fun ModelConfigScreen(viewModel: ModelConfigViewModel, modifier: Modifier = Modi
     var secretDraft by remember { mutableStateOf("") }
     var replaceAsk by remember { mutableStateOf(false) }
 
+    // Page (re)entry: drop stale ephemeral presentation state (notice/saved) left over
+    // from a previous visit — the ViewModel outlives this composable. Deliberately a
+    // SEPARATE effect from the secretResetEpoch one below: this call must never clear
+    // the local secret field, error, busy or any draft; it only clears the two
+    // presentation flags inside the ViewModel.
+    LaunchedEffect(viewModel) {
+        viewModel.onPageEntered()
+    }
+
     // VM-driven secret reset sync: only a consumed secret (successful save, reload,
     // explicit cancel/discard) may clear the local field copy. A failed save bumps
     // nothing, so the typed key stays both in the VM and in this field.

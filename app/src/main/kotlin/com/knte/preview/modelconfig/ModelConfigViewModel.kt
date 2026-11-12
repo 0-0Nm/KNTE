@@ -176,6 +176,20 @@ class ModelConfigViewModel(
         )
     }
 
+    /** Called by the UI when the page (re)enters composition. Clears ONLY the ephemeral
+     * presentation flags [ModelConfigUiState.notice] and [ModelConfigUiState.saved]:
+     * this ViewModel outlives the screen, so a stale cancel/save banner from a previous
+     * visit would otherwise reappear on re-entry. Must be called on the UI thread.
+     *
+     * It never touches error, busy, loading, dirty tracking, the non-secret inputs or
+     * the VM-private draft secret, never triggers a reload, network access or any
+     * persistence, and never bumps the secret reset epoch: while busy it leaves the
+     * busy flag and the draft exactly as they are. */
+    fun onPageEntered() {
+        val current = _state.value
+        _state.value = current.copy(notice = null, saved = false)
+    }
+
     /** Save. Single gate, IO off the main thread, no network access.
      *
      * `busy` is published and the draft (endpoint + model + typed key) is captured
