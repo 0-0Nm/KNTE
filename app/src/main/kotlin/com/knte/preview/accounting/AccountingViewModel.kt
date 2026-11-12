@@ -25,6 +25,10 @@ import java.time.LocalDate
 
 private const val PREFIX = "knte.isolated.accounting."
 private const val MAX_AMOUNT_TEXT_CHARS = 12
+/** 取消 intent 独立于写入 intent：仅 cancel 成功才清，失败或 scope 销毁时保留，供 init 恢复锁定。 */
+private const val CANCEL_INTENT_KEY = PREFIX + "cancelling"
+/** reload 失败时把当前读取错误码追加在原不明结果提示之后；用固定分隔符避免重复叠加。 */
+private const val READ_ERROR_SEPARATOR = "；当前读取错误："
 
 /** 新流水草稿的表单字段。id 在开始草稿时生成一次；金额保持文本，直到核对时才经
  * BigDecimal 按分精确转换（全程不经 Double）。raw_input 原样保留，不做任何解析。 */
@@ -121,11 +125,19 @@ class AccountingViewModel(
                 _state.update { it.copy(notice = "草稿超出可恢复上限，未恢复；已写流水不受影响。") }
             }
         }
-        if (handle.get<Boolean>(PREFIX + "writing") == true) {
+        val writeIntent = handle.get<Boolean>(PREFIX + "writing") == true
+        val cancelIntent = handle.get<Boolean>(CANCEL_INTENT_KEY) == true
+        if (writeIntent || cancelIntent) {
+            // 取消 intent 独立恢复：明确「取消未确认」，不与写入 intent 混淆，也不放松 writing 锁。
+            val unclear = when {
+                writeIntent && cancelIntent -> "上次写入与核对计划取消均无确认回执"
+                cancelIntent -> "上次核对计划取消尚无确认回执"
+                else -> "上次写入尚无确认回执"
+            }
             _state.update {
                 it.copy(
                     reviewRequired = true,
-                    error = "上次写入尚无确认回执。请保留草稿并核对隔离库；不会自动重试。",
+                    error = "$unclear。请保留草稿并核对隔离库；不会自动重试。",
                 )
             }
         }
@@ -146,13 +158,23 @@ class AccountingViewModel(
                         rows = snapshot.rows, findings = snapshot.findings,
                         revision = snapshot.revision,
                         income = snapshot.income, expense = snapshot.expense, net = snapshot.net,
-                        error = if (s.reviewRequired) s.error else null,
+                        error = if (s.reviewRequired) s.error?.substringBefore(READ_ERROR_SEPARATOR) else null,
                     )
                 }
                 recomputeReports()
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                _state.update { it.copy(busy = false, error = "隔离库读取失败，未视为空库：${describe(e)}") }
+                val readCode = describe(e)
+                _state.update { s ->
+                    val base = if (s.reviewRequired) {
+                        s.error?.substringBefore(READ_ERROR_SEPARATOR) ?: "上次结果尚无确认回执"
+                    } else null
+                    s.copy(
+                        busy = false,
+                        error = if (base != null) "$base$READ_ERROR_SEPARATOR$readCode"
+                        else "隔离库读取失败，未视为空库：$readCode",
+                    )
+                }
             }
         }
     }
@@ -168,8 +190,7 @@ class AccountingViewModel(
         val d = s.draft ?: return
         if (s.busy || s.reviewRequired) return
         if (value.length > 10) return
-        invalidateConfirmation()
-        saveDraft(d.copy(date = value))
+        cancelThen { saveDraft(d.copy(date = value)) }
     }
 
     fun incomeChanged(value: Boolean) {
@@ -177,8 +198,7 @@ class AccountingViewModel(
         val d = s.draft ?: return
         if (s.busy || s.reviewRequired) return
         if (d.income == value) return
-        invalidateConfirmation()
-        saveDraft(d.copy(income = value))
+        cancelThen { saveDraft(d.copy(income = value)) }
     }
 
     fun amountChanged(value: String) {
@@ -186,8 +206,7 @@ class AccountingViewModel(
         val d = s.draft ?: return
         if (s.busy || s.reviewRequired) return
         if (value.length > MAX_AMOUNT_TEXT_CHARS) return
-        invalidateConfirmation()
-        saveDraft(d.copy(amountText = value))
+        cancelThen { saveDraft(d.copy(amountText = value)) }
     }
 
     fun categoryChanged(value: String) {
@@ -195,8 +214,7 @@ class AccountingViewModel(
         val d = s.draft ?: return
         if (s.busy || s.reviewRequired) return
         if (value !in AccountingCodec.CATEGORIES) return
-        invalidateConfirmation()
-        saveDraft(d.copy(category = value))
+        cancelThen { saveDraft(d.copy(category = value)) }
     }
 
     fun locationChanged(value: String) {
@@ -204,8 +222,7 @@ class AccountingViewModel(
         val d = s.draft ?: return
         if (s.busy || s.reviewRequired) return
         if (value.length > AccountingCodec.MAX_LOCATION_CHARS) return
-        invalidateConfirmation()
-        saveDraft(d.copy(location = value))
+        cancelThen { saveDraft(d.copy(location = value)) }
     }
 
     fun noteChanged(value: String) {
@@ -213,8 +230,7 @@ class AccountingViewModel(
         val d = s.draft ?: return
         if (s.busy || s.reviewRequired) return
         if (value.codePointCount(0, value.length) > AccountingCodec.MAX_NOTE_CODE_POINTS) return
-        invalidateConfirmation()
-        saveDraft(d.copy(note = value))
+        cancelThen { saveDraft(d.copy(note = value)) }
     }
 
     fun rawInputChanged(value: String) {
@@ -223,14 +239,14 @@ class AccountingViewModel(
         if (s.busy || s.reviewRequired) return
         val encodable = runCatching { AccountingCodec.encode(value) }.isSuccess
         if (!encodable || value.length > AccountingCodec.MAX_RAW_CHARS) {
-            invalidateConfirmation()
-            _state.update {
-                it.copy(notice = "输入未接受：原文须为严格UTF-8且不超过${AccountingCodec.MAX_RAW_CHARS}字符；原草稿保留。")
+            cancelThen {
+                _state.update {
+                    it.copy(notice = "输入未接受：原文须为严格UTF-8且不超过${AccountingCodec.MAX_RAW_CHARS}字符；原草稿保留。")
+                }
             }
             return
         }
-        invalidateConfirmation()
-        saveDraft(d.copy(rawInput = value))
+        cancelThen { saveDraft(d.copy(rawInput = value)) }
     }
 
     /** 报表月份输入：空＝全部月份；输入中的前缀放行，完整且合法才重算。 */
@@ -272,7 +288,6 @@ class AccountingViewModel(
     }
 
     fun dismissConfirmation() {
-        if (_state.value.busy) return
         invalidateConfirmation()
     }
 
@@ -318,28 +333,56 @@ class AccountingViewModel(
         }
     }
 
-    fun discard() {
-        if (_state.value.busy) return
-        invalidateConfirmation()
-        clearDraftKeys()
-        _state.update {
-            it.copy(draft = null, confirmation = null, notice = "已放弃当前草稿；不修改或删除已写流水。")
+    fun discard(afterDiscard: () -> Unit = {}) {
+        cancelThen {
+            clearDraftKeys()
+            _state.update {
+                it.copy(
+                    draft = null, confirmation = null, error = null,
+                    notice = "已放弃当前草稿；不修改或删除已写流水。",
+                )
+            }
+            afterDiscard()
         }
     }
 
-    /** 计划失效必须回执 ledger.cancel，避免旧确认在别处继续生效。 */
+    /** 计划失效必须回执 ledger.cancel，避免旧确认在别处继续生效；不占用调用线程做 IO。 */
     private fun invalidateConfirmation() {
-        val plan = _state.value.confirmation ?: return
-        _state.update { it.copy(confirmation = null) }
+        cancelThen {}
+    }
+
+    /** 取消飞行期间 busy=true：新 prepare、字段覆盖、放弃与离页回调都排在 cancel 成功之后；
+     *  独立 cancel intent 在 handle 于飞行前落键，仅成功才清；失败或 scope 销毁时保留，init 据此恢复锁定；
+     *  失败不执行 next（不 callback、不清草稿键、不放松 writing 锁）。 */
+    private fun cancelThen(next: () -> Unit) {
+        val s = _state.value
+        if (s.busy || s.reviewRequired) return
+        val plan = s.confirmation
+        if (plan == null) {
+            next()
+            return
+        }
+        // cancel 开始前先在 handle 落独立 intent：飞行中 scope 销毁也能持久保留。
+        handle[CANCEL_INTENT_KEY] = true
+        _state.update { it.copy(busy = true, confirmation = null) }
         viewModelScope.launch {
             try {
                 withContext(ioDispatcher) { ledger().cancel(plan) }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 _state.update {
-                    it.copy(notice = "旧核对计划取消失败（${describe(e)}）；该计划已从界面移除，请勿复用旧确认。")
+                    it.copy(
+                        busy = false,
+                        reviewRequired = true,
+                        error = "旧核对计划取消未确认（${describe(e)}）；草稿保留，不复用旧确认，不会自动重试。",
+                    )
                 }
+                return@launch
             }
+            // 仅 cancel 真正成功才清 intent；失败与 scope 取消均保留。
+            handle[CANCEL_INTENT_KEY] = false
+            _state.update { it.copy(busy = false) }
+            next()
         }
     }
 

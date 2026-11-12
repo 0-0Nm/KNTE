@@ -61,6 +61,7 @@ fun ProductShell(
     readingContent: (@Composable () -> Unit)? = null,
     habitContent: (@Composable () -> Unit)? = null,
     referenceContent: (@Composable (Section) -> Unit)? = null,
+    onNavigateAwayFrom: ((ProductRoute, Boolean, () -> Unit) -> Unit)? = null,
 ) {
     var state by rememberSaveable(stateSaver = ShellStateSaver) { mutableStateOf(ShellState()) }
     var beforeQuiet by rememberSaveable(stateSaver = ShellStateSaver) { mutableStateOf(ShellState()) }
@@ -77,7 +78,9 @@ fun ProductShell(
 
     fun leave(proceed: () -> Unit) {
         if (!hostsContent) { leaveNotice = false; proceed(); return }
-        val gate = onNavigateAway
+        val gate: ((() -> Unit) -> Unit)? = if (onNavigateAwayFrom != null) {
+            { continuation -> onNavigateAwayFrom(state.route, toolOpen, continuation) }
+        } else onNavigateAway
         if (gate != null) {
             val origin = state.route
             val originTool = toolOpen

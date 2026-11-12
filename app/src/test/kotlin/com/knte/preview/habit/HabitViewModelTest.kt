@@ -76,6 +76,8 @@ class HabitViewModelTest {
         assertEquals("create", vm.state.value.confirmation?.op)
         assertEquals(0, api.snapshot().eventCount)
         vm.dismissConfirmation()
+        advanceUntilIdle()
+        assertNull(vm.state.value.confirmation)
         assertEquals(0, api.snapshot().eventCount)
         assertNotNull(vm.state.value.draft)
         assertEquals("早读", vm.state.value.draft?.name)
@@ -306,6 +308,156 @@ class HabitViewModelTest {
         assertEquals(id, vm.state.value.identities.first().id)
         assertEquals(2, api.snapshot().eventCount)
     }
+
+    /** 离页 callback 必须等真实 cancel IO 成功：飞行期间 busy=true，旧计划已不可确认。 */
+    @Test fun discardCallbackRunsOnlyAfterDurableCancel() = runVm { vm, api, _, _ ->
+        advanceUntilIdle()
+        vm.beginCreate(); advanceUntilIdle()
+        vm.nameChanged("待取消"); vm.targetDaysChanged("21")
+        vm.prepareIdentity(); advanceUntilIdle()
+        val plan = vm.state.value.confirmation!!.plan
+        var navigated = false
+        vm.discard { navigated = true }
+        assertFalse("cancel still in flight", navigated)
+        assertTrue(vm.state.value.busy)
+        assertNull(vm.state.value.confirmation)
+        advanceUntilIdle()
+        assertTrue("navigation must follow successful cancel", navigated)
+        assertFalse(vm.state.value.busy)
+        assertNull(vm.state.value.draft)
+        assertEquals(0, api.snapshot().eventCount)
+        try {
+            api.commit(plan, plan.confirmation)
+            fail("cancelled plan must never commit")
+        } catch (e: IllegalStateException) {
+            assertEquals("PLAN_CANCELLED", e.message)
+        }
+    }
+
+    /** 取消已 CONFIRMED 的计划失败：不 callback、不清稿、writing 锁不解除。 */
+    @Test fun failedCancelKeepsDraftAndWritingLock() = runVm { vm, api, _, _ ->
+        advanceUntilIdle()
+        vm.beginCreate(); advanceUntilIdle()
+        vm.nameChanged("保留"); vm.targetDaysChanged("7")
+        vm.prepareIdentity(); advanceUntilIdle()
+        val plan = vm.state.value.confirmation!!.plan
+        // 真实 store 外部确认该计划；cancel 必须对 CONFIRMED 显式失败，不能默默成功。
+        api.commit(plan, plan.confirmation)
+        var navigated = false
+        vm.discard { navigated = true }
+        advanceUntilIdle()
+        assertFalse(navigated)
+        assertTrue(vm.state.value.reviewRequired)
+        assertFalse(vm.state.value.busy)
+        assertEquals("保留", vm.state.value.draft?.name)
+        assertEquals(1, api.snapshot().eventCount)
+        vm.prepareIdentity()
+        advanceUntilIdle()
+        assertNull(vm.state.value.confirmation)
+        assertEquals(1, api.snapshot().eventCount)
+        vm.discard { navigated = true }
+        advanceUntilIdle()
+        assertFalse(navigated)
+        assertTrue(vm.state.value.reviewRequired)
+    }
+
+    /** dismiss/字段取消飞行 busy：重复 prepare 被拒绝，字段串行落在新值且失败不先清 error。 */
+    @Test fun cancelInFlightBlocksPrepareAndSerializesFieldChange() = runVm { vm, api, _, _ ->
+        advanceUntilIdle()
+        vm.beginCreate(); advanceUntilIdle()
+        vm.nameChanged("初始"); vm.targetDaysChanged("7")
+        vm.prepareIdentity(); advanceUntilIdle()
+        val plan = vm.state.value.confirmation!!.plan
+        vm.dismissConfirmation()
+        assertTrue(vm.state.value.busy)
+        vm.prepareIdentity()
+        vm.nameChanged("飞行中")
+        assertNull("busy must block duplicate prepare", vm.state.value.confirmation)
+        assertEquals("初始", vm.state.value.draft?.name)
+        advanceUntilIdle()
+        assertFalse(vm.state.value.busy)
+        assertNull(vm.state.value.error)
+        assertNull(vm.state.value.confirmation)
+        assertNotNull(vm.state.value.draft)
+        try {
+            api.commit(plan, plan.confirmation)
+            fail("dismissed plan must remain cancelled")
+        } catch (e: IllegalStateException) {
+            assertEquals("PLAN_CANCELLED", e.message)
+        }
+        vm.nameChanged("飞行后")
+        assertEquals("飞行后", vm.state.value.draft?.name)
+        assertEquals(0, api.snapshot().eventCount)
+    }
+
+    /** 字段变化路径同样串行：旧计划 cancel 成功后才保存新字段，失败则保原稿且不覆盖 error。 */
+    @Test fun fieldChangeWaitsForCancelSuccessAndDoesNotOverwriteFailure() = runVm { vm, api, _, _ ->
+        advanceUntilIdle()
+        vm.beginCreate(); advanceUntilIdle()
+        vm.nameChanged("旧值"); vm.targetDaysChanged("7")
+        vm.prepareIdentity(); advanceUntilIdle()
+        val plan = vm.state.value.confirmation!!.plan
+        vm.nameChanged("新值")
+        assertTrue(vm.state.value.busy)
+        assertEquals("旧值", vm.state.value.draft?.name)
+        advanceUntilIdle()
+        assertEquals("新值", vm.state.value.draft?.name)
+        try {
+            api.commit(plan, plan.confirmation)
+            fail("field change must cancel old plan")
+        } catch (e: IllegalStateException) {
+            assertEquals("PLAN_CANCELLED", e.message)
+        }
+        vm.prepareIdentity()
+        advanceUntilIdle()
+        val failedPlan = vm.state.value.confirmation!!.plan
+        api.commit(failedPlan, failedPlan.confirmation)
+        vm.nameChanged("不能落")
+        advanceUntilIdle()
+        assertTrue(vm.state.value.reviewRequired)
+        assertEquals("新值", vm.state.value.draft?.name)
+        assertNotNull(vm.state.value.error)
+        assertTrue(vm.state.value.error!!.contains("取消未确认"))
+        assertEquals(1, api.snapshot().eventCount)
+    }
+
+    /** 无 pending 计划时同步清稿回调；已存事件不删除。 */
+    @Test fun discardWithoutPlanClearsDraftSynchronouslyAndKeepsEvents() = runVm { vm, api, _, _ ->
+        advanceUntilIdle()
+        val id = createHabit(vm, "已存", 7)
+        assertEquals(1, api.snapshot().eventCount)
+        assertEquals(id, api.snapshot().identity(id)?.id)
+        vm.beginCreate(); advanceUntilIdle()
+        vm.nameChanged("草稿")
+        var navigated = false
+        vm.discard { navigated = true }
+        assertTrue(navigated)
+        assertFalse(vm.state.value.busy)
+        assertNull(vm.state.value.draft)
+        assertEquals(1, api.snapshot().eventCount)
+    }
+
+
+    /** unknown writing 锁：discard 不得解除 reviewRequired，也不得触发离页 callback。 */
+    @Test fun unknownWritingLockCannotBeDiscarded() = runVm(SavedStateHandle(mapOf(
+        "knte.isolated.habit.writing" to true,
+        "knte.isolated.habit.draft" to true,
+        "knte.isolated.habit.kind" to "CREATE",
+        "knte.isolated.habit.name" to "locked",
+    ))) { vm, api, _, _ ->
+        advanceUntilIdle()
+        assertTrue(vm.state.value.reviewRequired)
+        var navigated = false
+        vm.discard { navigated = true }
+        vm.dismissConfirmation()
+        advanceUntilIdle()
+        assertFalse(navigated)
+        assertTrue(vm.state.value.reviewRequired)
+        assertFalse(vm.state.value.busy)
+        assertEquals("locked", vm.state.value.draft?.name)
+        assertEquals(0, api.snapshot().eventCount)
+    }
+
     @Test fun editNameUsesNewConfirmedNameAndIndependentReadback() = runVm { vm, api, _, _ ->
         advanceUntilIdle()
         val id = createHabit(vm, "before", 21)
@@ -323,6 +475,131 @@ class HabitViewModelTest {
         vm.prepareIdentity();advanceUntilIdle()
         assertNull(vm.state.value.confirmation);assertNotNull(vm.state.value.error)
         assertEquals("before", api.snapshot().identity(id)?.name)
+    }
+
+    // ---- cancel intent 持久锁定回归（隔离副本新增） -----------------------
+
+    private fun habitCancelIntentKey() = "knte.isolated.habit.cancelling"
+
+    /** 取消成功才清 intent：正常 dismiss 后 handle 不再有取消 intent，且未进入 reviewRequired。 */
+    @Test fun cancelSuccessClearsPersistedIntent() {
+        val handle = SavedStateHandle()
+        runVm(handle) { vm, api, _, _ ->
+            advanceUntilIdle()
+            vm.beginCreate(); advanceUntilIdle()
+            vm.nameChanged("待取消"); vm.targetDaysChanged("21")
+            vm.prepareIdentity(); advanceUntilIdle()
+            assertNotNull(vm.state.value.confirmation)
+            vm.dismissConfirmation()
+            assertTrue(vm.state.value.busy)
+            assertEquals(true, handle.get<Boolean>(habitCancelIntentKey()))
+            advanceUntilIdle()
+            assertFalse(vm.state.value.busy)
+            assertFalse(vm.state.value.reviewRequired)
+            assertNull(vm.state.value.error)
+            assertFalse(handle.get<Boolean>(habitCancelIntentKey()) == true)
+            assertEquals(0, api.snapshot().eventCount)
+        }
+    }
+
+    /** 取消失败后同 SavedStateHandle 重建：init 识别取消 intent 并明确「取消未确认」锁定。 */
+    @Test fun failedCancelIntentKeepsRebuiltVmLocked() {
+        val handle = SavedStateHandle()
+        runVm(handle) { vm, api, _, _ ->
+            advanceUntilIdle()
+            vm.beginCreate(); advanceUntilIdle()
+            vm.nameChanged("取消失败"); vm.targetDaysChanged("7")
+            vm.prepareIdentity(); advanceUntilIdle()
+            val plan = vm.state.value.confirmation!!.plan
+            api.commit(plan, plan.confirmation)
+            vm.dismissConfirmation()
+            advanceUntilIdle()
+            assertTrue(vm.state.value.reviewRequired)
+            assertEquals(true, handle.get<Boolean>(habitCancelIntentKey()))
+            assertEquals(1, api.snapshot().eventCount)
+
+            val rebuilt = HabitViewModel({ api }, handle, StandardTestDispatcher(testScheduler))
+            try {
+                advanceUntilIdle()
+                assertTrue(rebuilt.state.value.reviewRequired)
+                assertFalse(rebuilt.state.value.busy)
+                assertTrue(rebuilt.state.value.error!!.contains("取消"))
+                rebuilt.beginCreate(); rebuilt.prepareIdentity(); rebuilt.confirmCommit()
+                advanceUntilIdle()
+                assertEquals(1, api.snapshot().eventCount)
+            } finally {
+                rebuilt.viewModelScope.cancel()
+            }
+        }
+    }
+
+    /** cancel 飞行中销毁 scope：intent 未被清，重建后仍以「取消未确认」锁定。 */
+    @Test fun scopeDestroyedDuringCancelKeepsIntentLockAfterRebuild() {
+        val handle = SavedStateHandle()
+        runVm(handle) { vm, api, _, _ ->
+            advanceUntilIdle()
+            vm.beginCreate(); advanceUntilIdle()
+            vm.nameChanged("飞行中"); vm.targetDaysChanged("7")
+            vm.prepareIdentity(); advanceUntilIdle()
+            assertNotNull(vm.state.value.confirmation)
+            vm.dismissConfirmation()
+            assertTrue(vm.state.value.busy)
+            assertEquals(true, handle.get<Boolean>(habitCancelIntentKey()))
+            vm.viewModelScope.cancel()
+            assertEquals(true, handle.get<Boolean>(habitCancelIntentKey()))
+            assertEquals(0, api.snapshot().eventCount)
+
+            val rebuilt = HabitViewModel({ api }, handle, StandardTestDispatcher(testScheduler))
+            try {
+                advanceUntilIdle()
+                assertTrue(rebuilt.state.value.reviewRequired)
+                assertFalse(rebuilt.state.value.busy)
+                assertTrue(rebuilt.state.value.error!!.contains("取消"))
+                rebuilt.beginCreate(); rebuilt.confirmCommit()
+                advanceUntilIdle()
+                assertEquals(0, api.snapshot().eventCount)
+            } finally {
+                rebuilt.viewModelScope.cancel()
+            }
+        }
+    }
+
+    /** reload 失败保留原不明结果提示并补当前读取错误码；重复 reload 不叠加文案。 */
+    @Test fun reloadFailurePreservesUnclearResultAndAppendsReadCodeOnce() {
+        val handle = SavedStateHandle(mapOf("knte.isolated.habit.cancelling" to true))
+        runVm(handle) { vm, _, root, _ ->
+            val pending = root.resolve("db/habits.jsonl.pending")
+            pending.parentFile?.mkdirs()
+            pending.writeText("blocked\n")
+            advanceUntilIdle()
+            assertTrue(vm.state.value.reviewRequired)
+            val first = vm.state.value.error!!
+            assertTrue(first.contains("取消"))
+            assertTrue(first.contains("当前读取错误"))
+            assertTrue(first.contains("HABIT_PENDING_REVIEW_REQUIRED"))
+            vm.reload()
+            advanceUntilIdle()
+            val second = vm.state.value.error!!
+            assertTrue(second.contains("取消"))
+            assertTrue(second.contains("HABIT_PENDING_REVIEW_REQUIRED"))
+            assertEquals(1, second.split("当前读取错误").size - 1)
+        }
+    }
+
+    /** discard 成功清过期 error；reviewRequired 锁下 discard 仍被拒绝（由既有测试守护）。 */
+    @Test fun discardSuccessClearsStaleError() = runVm { vm, api, _, _ ->
+        advanceUntilIdle()
+        vm.beginCreate(); advanceUntilIdle()
+        vm.nameChanged(""); vm.targetDaysChanged("0")
+        vm.prepareIdentity(); advanceUntilIdle()
+        assertNotNull(vm.state.value.error)
+        assertFalse(vm.state.value.reviewRequired)
+        var navigated = false
+        vm.discard { navigated = true }
+        assertTrue(navigated)
+        assertNull(vm.state.value.error)
+        assertNull(vm.state.value.draft)
+        assertEquals(0, api.snapshot().eventCount)
     }
 
 }

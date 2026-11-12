@@ -32,6 +32,10 @@ const val HABIT_STORE_LABEL =
     "本 App 私有隔离库 · HabitLedgerStore · db/habits.jsonl（schema knte-habit-v1，追加式）"
 
 private const val PREFIX = "knte.isolated.habit."
+/** 取消 intent 独立于写入 intent：仅 cancel 成功才清，失败或 scope 销毁时保留，供 init 恢复锁定。 */
+private const val CANCEL_INTENT_KEY = PREFIX + "cancelling"
+/** reload 失败时把当前读取错误码追加在原不明结果提示之后；用固定分隔符避免重复叠加。 */
+private const val READ_ERROR_SEPARATOR = "；当前读取错误："
 
 enum class HabitDraftKind { CREATE, EDIT, CHECK }
 
@@ -140,11 +144,19 @@ class HabitViewModel(
 
     init {
         restoreDraft()
-        if (handle.get<Boolean>(PREFIX + "writing") == true) {
+        val writeIntent = handle.get<Boolean>(PREFIX + "writing") == true
+        val cancelIntent = handle.get<Boolean>(CANCEL_INTENT_KEY) == true
+        if (writeIntent || cancelIntent) {
+            // 取消 intent 独立恢复：明确「取消未确认」，不与写入 intent 混淆，也不放松 writing 锁。
+            val unclear = when {
+                writeIntent && cancelIntent -> "上次写入与核对计划取消均无确认回执"
+                cancelIntent -> "上次核对计划取消尚无确认回执"
+                else -> "上次写入尚无确认回执"
+            }
             _state.update {
                 it.copy(
                     reviewRequired = true,
-                    error = "上次写入尚无确认回执。请保留草稿并核对隔离库；不会自动重试。",
+                    error = "$unclear。请保留草稿并核对隔离库；不会自动重试。",
                 )
             }
         }
@@ -168,19 +180,20 @@ class HabitViewModel(
                         today = today,
                         selectedId = s.selectedId?.takeIf { id -> snapshot.identity(id) != null }
                             ?: snapshot.identities(false).firstOrNull()?.id,
-                        error = if (s.reviewRequired) s.error else null,
+                        error = if (s.reviewRequired) s.error?.substringBefore(READ_ERROR_SEPARATOR) else null,
                     )
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                _state.update {
-                    it.copy(
+                val readCode = describe(e)
+                _state.update { s ->
+                    val base = if (s.reviewRequired) {
+                        s.error?.substringBefore(READ_ERROR_SEPARATOR) ?: "上次结果尚无确认回执"
+                    } else null
+                    s.copy(
                         busy = false,
-                        error = if (it.reviewRequired) {
-                            "上次写入尚无确认回执，且隔离库当前不可读：${describe(e)}"
-                        } else {
-                            "隔离库读取失败，未视为空库：${describe(e)}"
-                        },
+                        error = if (base != null) "$base$READ_ERROR_SEPARATOR$readCode"
+                        else "隔离库读取失败，未视为空库：$readCode",
                     )
                 }
             }
@@ -237,8 +250,7 @@ class HabitViewModel(
         if (s.busy || s.reviewRequired) return
         if (d.kind == HabitDraftKind.CHECK) return
         if (value.length > 80) return
-        invalidateConfirmation()
-        persist(d.copy(name = value))
+        cancelThen { persist(d.copy(name = value)) }
     }
 
     /** 目标天数只接受严格整数文本；空、符号、小数、前导零一律拒绝，不猜测不补默认值。 */
@@ -248,12 +260,12 @@ class HabitViewModel(
         if (s.busy || s.reviewRequired) return
         if (d.kind == HabitDraftKind.CHECK) return
         if (value.length > 4 || !value.all { it in '0'..'9' }) {
-            invalidateConfirmation()
-            _state.update { it.copy(notice = "目标天数只接受 1..3650 的整数；原输入保留。") }
+            cancelThen {
+                _state.update { it.copy(notice = "目标天数只接受 1..3650 的整数；原输入保留。") }
+            }
             return
         }
-        invalidateConfirmation()
-        persist(d.copy(targetDaysText = value))
+        cancelThen { persist(d.copy(targetDaysText = value)) }
     }
 
     fun prepareIdentity() {
@@ -334,8 +346,7 @@ class HabitViewModel(
         if (s.busy || s.reviewRequired) return
         if (d.kind != HabitDraftKind.CHECK) return
         if (value.length > 10) return
-        invalidateConfirmation()
-        persist(d.copy(date = value))
+        cancelThen { persist(d.copy(date = value)) }
     }
 
     fun checkDoneChanged(value: Boolean) {
@@ -343,8 +354,7 @@ class HabitViewModel(
         val d = s.draft ?: return
         if (s.busy || s.reviewRequired) return
         if (d.kind != HabitDraftKind.CHECK) return
-        invalidateConfirmation()
-        persist(d.copy(done = value))
+        cancelThen { persist(d.copy(done = value)) }
     }
 
     fun checkNoteChanged(value: String) {
@@ -353,8 +363,7 @@ class HabitViewModel(
         if (s.busy || s.reviewRequired) return
         if (d.kind != HabitDraftKind.CHECK) return
         if (value.length > 200) return
-        invalidateConfirmation()
-        persist(d.copy(note = value))
+        cancelThen { persist(d.copy(note = value)) }
     }
 
     fun prepareCheck() {
@@ -448,16 +457,19 @@ class HabitViewModel(
     }
 
     fun dismissConfirmation() {
-        if (_state.value.busy) return
         invalidateConfirmation()
     }
 
-    fun discard() {
-        if (_state.value.busy) return
-        invalidateConfirmation()
-        clearDraftKeys()
-        _state.update {
-            it.copy(draft = null, confirmation = null, notice = "已放弃当前草稿；未向隔离库追加任何事件。")
+    fun discard(afterDiscard: () -> Unit = {}) {
+        cancelThen {
+            clearDraftKeys()
+            _state.update {
+                it.copy(
+                    draft = null, confirmation = null, error = null,
+                    notice = "已放弃当前草稿；未向隔离库追加任何事件。",
+                )
+            }
+            afterDiscard()
         }
     }
 
@@ -545,19 +557,43 @@ class HabitViewModel(
         else -> "已写入并独立重读确认。"
     }
 
-    /** 计划失效必须回执 cancel，避免旧确认在别处继续生效。 */
+    /** 计划失效必须回执 cancel，避免旧确认在别处继续生效；不占用调用线程做 IO。 */
     private fun invalidateConfirmation() {
-        val plan = _state.value.confirmation?.plan ?: return
-        _state.update { it.copy(confirmation = null) }
+        cancelThen {}
+    }
+
+    /** 取消飞行期间 busy=true：新 prepare、字段覆盖、放弃与离页回调都排在 cancel 成功之后；
+     *  独立 cancel intent 在 handle 于飞行前落键，仅成功才清；失败或 scope 销毁时保留，init 据此恢复锁定；
+     *  失败不执行 next（不 callback、不清草稿键、不放松 writing 锁）。 */
+    private fun cancelThen(next: () -> Unit) {
+        val s = _state.value
+        if (s.busy || s.reviewRequired) return
+        val plan = s.confirmation?.plan
+        if (plan == null) {
+            next()
+            return
+        }
+        // cancel 开始前先在 handle 落独立 intent：飞行中 scope 销毁也能持久保留。
+        handle[CANCEL_INTENT_KEY] = true
+        _state.update { it.copy(busy = true, confirmation = null) }
         viewModelScope.launch {
             try {
                 withContext(ioDispatcher) { api().cancel(plan) }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 _state.update {
-                    it.copy(notice = "旧核对计划取消失败（${describe(e)}）；该计划已从界面移除，请勿复用旧确认。")
+                    it.copy(
+                        busy = false,
+                        reviewRequired = true,
+                        error = "旧核对计划取消未确认（${describe(e)}）；草稿保留，不复用旧确认，不会自动重试。",
+                    )
                 }
+                return@launch
             }
+            // 仅 cancel 真正成功才清 intent；失败与 scope 取消均保留。
+            handle[CANCEL_INTENT_KEY] = false
+            _state.update { it.copy(busy = false) }
+            next()
         }
     }
 
