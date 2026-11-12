@@ -1,7 +1,7 @@
 package com.knte.preview.ui.product
 
 /** Navigation ownership is a UI scope, never a second business state source. */
-enum class ContentOwner { PREVIEW_TOOL, DIARY, TIME, ACCOUNTING, HABIT, REFERENCE, NONE }
+enum class ContentOwner { PREVIEW_TOOL, DIARY, TIME, ACCOUNTING, HABIT, REFERENCE, MODEL_CONFIG, NONE }
 fun contentOwner(route: ProductRoute, tool: Boolean = false): ContentOwner = when {
     tool -> ContentOwner.PREVIEW_TOOL
     route.isDiary -> ContentOwner.DIARY

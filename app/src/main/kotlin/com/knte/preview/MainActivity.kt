@@ -1,6 +1,7 @@
 package com.knte.preview
 
 import android.os.Bundle
+import com.knte.preview.modelconfig.*
 import android.content.Intent
 import android.provider.DocumentsContract
 import androidx.activity.result.contract.ActivityResultContracts
@@ -143,6 +144,25 @@ class MainActivity : ComponentActivity() {
                     extras.createSavedStateHandle()) as T
             }
         }
+        // Dedicated new-app preferences only; lazy construction occurs in VM IO calls.
+        // No legacy credential migration, transport, connection test or Internet permission.
+        val modelAppContext = applicationContext
+        val modelRepository by lazy {
+            val store = AndroidModelConfigStore(modelAppContext.getSharedPreferences(
+                "model-config-v3", android.content.Context.MODE_PRIVATE))
+            AndroidModelConfigRepository(store, AndroidKeystoreVault(store))
+        }
+        val modelFactory = object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
+                require(modelClass.isAssignableFrom(ModelConfigViewModel::class.java))
+                val deferred = object : ModelConfigRepository {
+                    override fun load(): ModelConfigSnapshot = modelRepository.load()
+                    override fun commit(draft: ModelConfigDraft): ModelProfile = modelRepository.commit(draft)
+                }
+                @Suppress("UNCHECKED_CAST")
+                return ModelConfigViewModel(deferred) as T
+            }
+        }
         setContent {
             val stateHolder: NoteViewModel = viewModel(factory = factory)
             val diaryHolder: DiaryViewModel = viewModel(factory = diaryFactory)
@@ -150,6 +170,7 @@ class MainActivity : ComponentActivity() {
             val accountingHolder: AccountingViewModel = viewModel(factory = accountingFactory)
             val habitHolder: HabitViewModel = viewModel(factory = habitFactory)
             val referenceHolder: ReferenceViewModel = viewModel(factory = referenceFactory)
+            val modelHolder: ModelConfigViewModel = viewModel(factory = modelFactory)
             ProductRoot(stateHolder, diaryHolder, timeHolder, accountingHolder, sourceHolder,
                 chooseSource = {
                     chooseSource.launch(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
@@ -158,7 +179,7 @@ class MainActivity : ComponentActivity() {
                     chooseBook.launch(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*")
                         .addCategory(Intent.CATEGORY_OPENABLE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         .putExtra(Intent.EXTRA_MIME_TYPES,arrayOf("text/plain","text/markdown","text/x-markdown")))
-                }, habit = habitHolder, reference = referenceHolder)
+                }, habit = habitHolder, reference = referenceHolder, modelConfig = modelHolder)
         }
     }
 }

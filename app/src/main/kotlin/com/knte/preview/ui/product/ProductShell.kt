@@ -44,6 +44,9 @@ private val ShellStateSaver = listSaver<ShellState, String>(
  * Header exits and module/category/section navigation all use the same gate. Parent must
  * retain draft state above this composition; this shell never saves/discards business drafts.
  * Existing child BackHandlers are composed later and may handle editor Back first.
+ * [modelConfigContent] is a standalone local configuration page, not model invocation.
+ * [onLeaveModelConfig] owns its busy/dirty gate; null falls back to [canLeaveContent].
+ * Model exit continuations share the route/origin and epoch protection above.
  *
  * Normal shell owns safeDrawing insets. Hosted tool has its own Scaffold/IME handling;
  * the wrapper adds only a consumed top inset. Actual IME/insets behavior needs device review.
@@ -62,10 +65,13 @@ fun ProductShell(
     habitContent: (@Composable () -> Unit)? = null,
     referenceContent: (@Composable (Section) -> Unit)? = null,
     onNavigateAwayFrom: ((ProductRoute, Boolean, () -> Unit) -> Unit)? = null,
+    modelConfigContent: (@Composable () -> Unit)? = null,
+    onLeaveModelConfig: ((() -> Unit) -> Unit)? = null,
 ) {
     var state by rememberSaveable(stateSaver = ShellStateSaver) { mutableStateOf(ShellState()) }
     var beforeQuiet by rememberSaveable(stateSaver = ShellStateSaver) { mutableStateOf(ShellState()) }
     var toolOpen by rememberSaveable { mutableStateOf(false) }
+    var modelConfigOpen by rememberSaveable { mutableStateOf(false) }
     var settingsPage by rememberSaveable { mutableStateOf<String?>(null) }
     var leaveNotice by rememberSaveable { mutableStateOf(false) }
     val continuationGate = remember { NavigationContinuationGate() }
@@ -118,14 +124,54 @@ fun ProductShell(
         }
     }
 
+    fun openModelConfig() {
+        if (modelConfigContent == null) return
+        // Shared epoch invalidates any older ordinary navigation continuation.
+        leave {
+            closeOverlay()
+            modelConfigOpen = true
+        }
+    }
+    fun leaveModel() {
+        continuationGate.begin()
+        val continuation = continuationGate.once(state.route, true, { state.route to modelConfigOpen }) {
+            leaveNotice = false
+            modelConfigOpen = false
+            settingsPage = null
+            state = state.open(Overlay.SETTINGS)
+        }
+        if (onLeaveModelConfig != null) {
+            onLeaveModelConfig(continuation)
+        } else if (canLeaveContent) {
+            continuation()
+        } else {
+            leaveNotice = true
+        }
+    }
+
     // Registered before hosted children so their editor-specific Back behavior is retained.
-    BackHandler(enabled = toolOpen && state.overlay == Overlay.NONE) { leave { toolOpen = false } }
-    BackHandler(enabled = !toolOpen && route.module == Module.QUIET && state.overlay == Overlay.NONE) {
+    BackHandler(enabled = !modelConfigOpen && toolOpen && state.overlay == Overlay.NONE) { leave { toolOpen = false } }
+    BackHandler(enabled = !modelConfigOpen && !toolOpen && route.module == Module.QUIET && state.overlay == Overlay.NONE) {
         navigate(beforeQuiet.route)
     }
 
+    BackHandler(enabled = modelConfigOpen) { leaveModel() }
+
     ProductTheme {
-        if (toolOpen) {
+        if (modelConfigOpen) {
+            // Standalone bounded host; insets/IME shrink the content, not fixed actions.
+            // Parent retains the model draft/VM and owns busy/dirty confirmation.
+            Column(modifier.fillMaxSize().background(ProductInk.Paper).safeDrawingPadding().imePadding()) {
+                PaperAction("返回设置", ::leaveModel, Modifier.fillMaxWidth())
+                Text("本机配置 · 保存不联网", Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.labelMedium, color = ProductInk.Secondary)
+                if (leaveNotice) LeaveBlockedNotice()
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    if (modelConfigContent != null) modelConfigContent()
+                    else Text("模型配置未连接", Modifier.padding(16.dp))
+                }
+            }
+        } else if (toolOpen) {
             // No shell Scaffold and no nested product rails around the existing NotesScreen.
             Column(modifier.fillMaxSize().background(ProductInk.Paper).statusBarsPadding()) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -206,8 +252,11 @@ fun ProductShell(
                 }
             }
         }
-        ProductOverlay(state.overlay, route, settingsPage, { settingsPage = it },
-            ::closeOverlay, ::navigate, ::openTool)
+        if (!modelConfigOpen) {
+            ProductOverlay(state.overlay, route, settingsPage, { settingsPage = it },
+                ::closeOverlay, ::navigate, ::openTool,
+                onOpenModelConfig = if (modelConfigContent != null) ::openModelConfig else null)
+        }
     }
 }
 

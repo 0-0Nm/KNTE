@@ -6,6 +6,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import com.knte.preview.modelconfig.ModelConfigScreen
+import com.knte.preview.modelconfig.ModelConfigViewModel
 import com.knte.preview.ui.product.ContentOwner
 import com.knte.preview.ui.product.contentOwner
 import com.knte.preview.ui.product.NavigationExitDecision
@@ -37,7 +39,8 @@ import com.knte.preview.ui.product.ProductShell
 @Composable
 fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel,
     accounting: AccountingViewModel, source: SourceViewModel, chooseSource: () -> Unit,
-    reading: ReadingViewModel, chooseBook: () -> Unit, habit: HabitViewModel, reference: ReferenceViewModel) {
+    reading: ReadingViewModel, chooseBook: () -> Unit, habit: HabitViewModel, reference: ReferenceViewModel,
+    modelConfig: ModelConfigViewModel? = null) {
     var showSource by rememberSaveable { mutableStateOf(true) }
     var allowSourceWithRetainedDraft by rememberSaveable { mutableStateOf(false) }
     val diaryState by diary.state.collectAsStateWithLifecycle()
@@ -46,6 +49,7 @@ fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel
     val accountingState by accounting.state.collectAsStateWithLifecycle()
     val habitState by habit.state.collectAsStateWithLifecycle()
     val referenceState by reference.state.collectAsStateWithLifecycle()
+    val modelState = modelConfig?.state?.collectAsStateWithLifecycle()?.value
     var pendingOwner by remember { mutableStateOf<ContentOwner?>(null) }
     var pendingNavigation by remember { mutableStateOf<(() -> Unit)?>(null) }
     var busyNotice by remember { mutableStateOf(false) }
@@ -54,6 +58,7 @@ fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel
 
     fun isBusy(owner: ContentOwner): Boolean = when(owner) {
         ContentOwner.PREVIEW_TOOL -> noteState.isBusy
+        ContentOwner.MODEL_CONFIG -> (modelConfig?.state?.value ?: modelState)?.let { it.busy || it.loading } ?: false
         ContentOwner.DIARY -> diaryState.busy
         ContentOwner.TIME -> timeState.busy
         ContentOwner.ACCOUNTING -> accountingState.busy
@@ -67,10 +72,11 @@ fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel
         ContentOwner.ACCOUNTING -> accountingState.reviewRequired
         ContentOwner.HABIT -> habitState.reviewRequired
         ContentOwner.REFERENCE -> referenceState.reviewRequired
-        ContentOwner.PREVIEW_TOOL, ContentOwner.NONE -> false
+        ContentOwner.PREVIEW_TOOL, ContentOwner.MODEL_CONFIG, ContentOwner.NONE -> false
     }
     fun needsConfirmation(owner: ContentOwner): Boolean = when(owner) {
         ContentOwner.PREVIEW_TOOL -> noteState.draft != null
+        ContentOwner.MODEL_CONFIG -> (modelConfig?.state?.value ?: modelState)?.hasUnsavedChanges == true
         ContentOwner.DIARY -> diaryState.hasUnsavedChanges || diaryState.confirmation != null
         ContentOwner.TIME -> timeState.draft != null || timeState.confirmation != null
         ContentOwner.ACCOUNTING -> accountingState.draft != null || accountingState.confirmation != null
@@ -81,6 +87,7 @@ fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel
     fun discardOnly(owner: ContentOwner, continuation: () -> Unit) {
         when(owner) {
             ContentOwner.PREVIEW_TOOL -> { notes.cancel();continuation() }
+            ContentOwner.MODEL_CONFIG -> { modelConfig?.cancel();if(modelConfig == null || modelConfig.canLeave())continuation() }
             ContentOwner.DIARY -> { diary.discard();continuation() }
             ContentOwner.TIME -> { time.discard();continuation() }
             ContentOwner.ACCOUNTING -> accounting.discard { continuation() }
@@ -102,6 +109,8 @@ fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel
         diaryState.draft != null || diaryState.confirmation != null, allowSourceWithRetainedDraft)
     ProductShell(
         noteToolContent={NotesScreen(notes)},
+        modelConfigContent = if (modelConfig == null) null else { { ModelConfigScreen(modelConfig) } },
+        onLeaveModelConfig = { continuation -> requestLeave(ContentOwner.MODEL_CONFIG, continuation) },
         diaryContent={
             Column {
                 Row {
@@ -139,7 +148,9 @@ fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel
     val owner=pendingOwner
     if(owner!=null && pendingNavigation!=null)AlertDialog(
         onDismissRequest={pendingOwner=null;pendingNavigation=null},title={Text("离开前处理当前编辑")},
-        text={Text("仅放弃当前页面的草稿与待确认计划；其他模块已恢复的输入保持不变。取消失败时仍留在当前页。")},
+        text={Text(if(owner == ContentOwner.MODEL_CONFIG)
+            "放弃未保存的接口、模型与本次输入的密钥；不删除已保存凭据，也不发送请求。" else
+            "仅放弃当前页面的草稿与待确认计划；其他模块已恢复的输入保持不变。取消失败时仍留在当前页。")},
         confirmButton={TextButton(enabled=!isBusy(owner),onClick={
             val go=pendingNavigation
             pendingOwner=null;pendingNavigation=null

@@ -33,6 +33,7 @@ internal fun ProductOverlay(
     onClose: () -> Unit,
     onRoute: (ProductRoute) -> Unit,
     onOpenPreviewTool: () -> Unit,
+    onOpenModelConfig: (() -> Unit)? = null,
 ) {
     if (overlay == Overlay.NONE) return
     val back = {
@@ -64,7 +65,7 @@ internal fun ProductOverlay(
                             Text("世界作用域随路由派生。师长是全局入口，不显示世界行；只有可问显示章节行。",
                                 style = MaterialTheme.typography.bodySmall, color = ProductInk.Secondary)
                         }
-                        Overlay.SETTINGS -> SettingsContent(settingsPage, onSettingsPage, onOpenPreviewTool)
+                        Overlay.SETTINGS -> SettingsContent(settingsPage, onSettingsPage, onOpenPreviewTool, onOpenModelConfig)
                         Overlay.NONE -> Unit
                     }
                 }
@@ -124,13 +125,19 @@ private fun OverlayTitle(title: String) {
 
 /** Deliberate settings reconstruction, not HTML's five groups of nonfunctional controls. */
 @Composable
-private fun SettingsContent(page: String?, onPage: (String?) -> Unit, openTool: () -> Unit) {
+private fun SettingsContent(
+    page: String?, onPage: (String?) -> Unit, openTool: () -> Unit,
+    onOpenModelConfig: (() -> Unit)? = null,
+) {
     when (page) {
         "about" -> {
             OverlayTitle("关于知温")
             Text("知温 · 记念与共读")
             Text("静室 / 记念 / 共读 / 知温。部分服务尚未连接，可用范围见数据边界。")
-            Text("外观使用本地 HTML 默认纸色与系统衬线回退；未安装原型字体。没有可持久化的主题、模型或磁吸偏好。",
+            Text("外观使用本地 HTML 默认纸色与系统衬线回退；未安装原型字体。没有可持久化的主题或磁吸偏好。",
+                style = MaterialTheme.typography.bodySmall)
+            Text(if (onOpenModelConfig != null) "模型仅支持本机配置与保存；未接模型调用，不测试连接。"
+                else "模型配置未连接；未接模型调用，不测试连接。",
                 style = MaterialTheme.typography.bodySmall)
         }
         "data" -> {
@@ -148,6 +155,16 @@ private fun SettingsContent(page: String?, onPage: (String?) -> Unit, openTool: 
         }
         else -> {
             OverlayTitle("设置")
+            PaperCard {
+                if (onOpenModelConfig != null) {
+                    PaperAction("模型配置 · 本机保存", onOpenModelConfig, Modifier.fillMaxWidth())
+                    Text("仅本机配置；未接模型调用，不测试连接。", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    Text("模型配置 · 本机保存 · 未连接", style = MaterialTheme.typography.titleMedium)
+                    Text("父级尚未接入模型配置页面。未接模型调用，不测试连接。",
+                        style = MaterialTheme.typography.bodySmall)
+                }
+            }
             PaperAction("关于", { onPage("about") }, Modifier.fillMaxWidth())
             PaperAction("数据边界", { onPage("data") }, Modifier.fillMaxWidth())
             PaperCard {

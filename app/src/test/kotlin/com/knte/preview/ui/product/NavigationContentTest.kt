@@ -67,4 +67,11 @@ class NavigationContentTest {
         next();assertEquals(1,count)
     }
 
+    @Test fun modelSettingsOwnTheirDraftAndNeverAliasBusinessRouteOwnership() {
+        assertFalse(ProductRoute.leaves.any { contentOwner(it) == ContentOwner.MODEL_CONFIG })
+        assertEquals(NavigationExitDecision.WAIT,navigationExitDecision(true,false,true))
+        assertEquals(NavigationExitDecision.CONFIRM_DISCARD,navigationExitDecision(false,false,true))
+        assertEquals(NavigationExitDecision.DISCARD_CLEAN,navigationExitDecision(false,false,false))
+    }
+
 }
