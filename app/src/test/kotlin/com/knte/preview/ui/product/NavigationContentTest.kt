@@ -34,4 +34,37 @@ class NavigationContentTest {
         assertFalse(diarySourceVisible(false,true,true))
     }
 
+    @Test fun currentContinuationRunsOnlyOnce() {
+        val gate=NavigationContinuationGate();val origin=ProductRoute();var count=0
+        gate.begin();val next=gate.once(origin,false,{origin to false}){count++}
+        next();next();assertEquals(1,count)
+    }
+    @Test fun newerExitInvalidatesOldCallbackEvenAfterReturningToSameRoute() {
+        val gate=NavigationContinuationGate();val origin=ProductRoute()
+        var current=origin;var count=0
+        gate.begin();val old=gate.once(origin,false,{current to false}){count++}
+        gate.begin();current=ProductRoute(Module.QUIET,null,null)
+        gate.begin();current=origin
+        old();assertEquals(0,count)
+        val latest=gate.once(origin,false,{current to false}){count++}
+        latest();assertEquals(1,count)
+    }
+    @Test fun rejectedOriginCallbackCannotReviveWhenRouteLaterMatches() {
+        val gate=NavigationContinuationGate();val origin=ProductRoute();var current=origin;var count=0
+        gate.begin();val next=gate.once(origin,false,{current to false}){count++}
+        current=ProductRoute(Module.QUIET,null,null);next()
+        current=origin;next();assertEquals(0,count)
+    }
+    @Test fun changedToolRejectsAndConsumesOldCallback() {
+        val gate=NavigationContinuationGate();val origin=ProductRoute();var tool=true;var count=0
+        gate.begin();val next=gate.once(origin,false,{origin to tool}){count++}
+        next();tool=false;next();assertEquals(0,count)
+    }
+    @Test fun throwingContinuationIsConsumedBeforeAction() {
+        val gate=NavigationContinuationGate();val origin=ProductRoute();var count=0
+        gate.begin();val next=gate.once(origin,false,{origin to false}){count++;throw IllegalStateException("synthetic navigation failure")}
+        try { next();fail("expected synthetic failure") } catch(_:IllegalStateException) { }
+        next();assertEquals(1,count)
+    }
+
 }

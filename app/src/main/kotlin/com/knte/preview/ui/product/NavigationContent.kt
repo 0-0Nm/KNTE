@@ -25,3 +25,21 @@ fun navigationExitDecision(busy: Boolean, reviewRequired: Boolean, hasPendingEdi
 /** Recovery reveals a draft by default; an explicit preserve-and-view-source choice wins. */
 fun diarySourceVisible(requested: Boolean, hasPendingEdit: Boolean, allowRetainedDraft: Boolean = false): Boolean =
     requested && (!hasPendingEdit || allowRetainedDraft)
+
+/** UI-thread-confined gate. Every exit request invalidates older callbacks, including
+ * requests from an unhosted route. A callback is consumed even when rejected or throwing. */
+class NavigationContinuationGate {
+    private var epoch = 0L
+    fun begin() { epoch++ }
+    fun once(origin: ProductRoute, originTool: Boolean,
+        current: () -> Pair<ProductRoute, Boolean>, proceed: () -> Unit): () -> Unit {
+        val issued = epoch
+        var used = false
+        return {
+            if (!used) {
+                used = true
+                if (issued == epoch && current() == (origin to originTool)) proceed()
+            }
+        }
+    }
+}

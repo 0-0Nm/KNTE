@@ -68,6 +68,7 @@ fun ProductShell(
     var toolOpen by rememberSaveable { mutableStateOf(false) }
     var settingsPage by rememberSaveable { mutableStateOf<String?>(null) }
     var leaveNotice by rememberSaveable { mutableStateOf(false) }
+    val continuationGate = remember { NavigationContinuationGate() }
     val route = state.route
     val isTime = route.module == Module.MEMORY && route.category == MemoryCategory.TIME && route.section == Section.TIME
     val isLocalReading = route.module == Module.READING && route.section == Section.ASK && readingContent != null
@@ -77,6 +78,7 @@ fun ProductShell(
     val hostsContent = toolOpen || (route.isDiary && diaryContent != null) || (isTime && timeContent != null) || (isAccounting && accountingContent != null) || (isHabit && habitContent != null) || (isReference && referenceContent != null)
 
     fun leave(proceed: () -> Unit) {
+        continuationGate.begin()
         if (!hostsContent) { leaveNotice = false; proceed(); return }
         val gate: ((() -> Unit) -> Unit)? = if (onNavigateAwayFrom != null) {
             { continuation -> onNavigateAwayFrom(state.route, toolOpen, continuation) }
@@ -88,14 +90,10 @@ fun ProductShell(
             // The hosted editor remains composed beneath this navigation-only overlay.
             state = state.open(Overlay.NONE)
             settingsPage = null
-            var used = false
-            gate {
-                if (!used && origin == state.route && originTool == toolOpen) {
-                    used = true
-                    leaveNotice = false
-                    proceed()
-                }
-            }
+            gate(continuationGate.once(origin, originTool, { state.route to toolOpen }) {
+                leaveNotice = false
+                proceed()
+            })
         } else if (canLeaveContent) {
             leaveNotice = false
             proceed()
