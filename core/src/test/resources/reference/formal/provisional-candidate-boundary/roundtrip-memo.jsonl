@@ -1,0 +1,1 @@
+{"op":"upsert","id":"m-00000001","title":"legacy-optional-null","done":false,"archived":false,"tags":["契约"],"created_ts":"2026-01-10T08:00:00","ts":"2026-01-15T09:00:00","at_trust":"unverified","seed":null,"x_meta":{"due":null,"nested":{"seed":null,"list":[1,"a",true,null]}}}

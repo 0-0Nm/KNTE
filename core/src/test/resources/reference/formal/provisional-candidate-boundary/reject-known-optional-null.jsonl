@@ -1,0 +1,3 @@
+{"op":"upsert","id":"m-00000001","title":"null-due","due":null,"done":false,"archived":false,"tags":[],"created_ts":"2026-01-10T08:00:00","ts":"2026-01-15T09:00:00","at_trust":"unverified"}
+{"op":"upsert","id":"m-00000002","title":"null-world","done":false,"archived":false,"tags":[],"world":null,"created_ts":"2026-01-10T08:00:00","ts":"2026-01-15T09:00:00","at_trust":"unverified"}
+{"op":"upsert","id":"m-00000003","title":"null-trust","done":false,"archived":false,"tags":[],"created_ts":"2026-01-10T08:00:00","ts":"2026-01-15T09:00:00","at_trust":null}
