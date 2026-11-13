@@ -305,6 +305,15 @@ private fun MonthContent(state: AccountingUiState, viewModel: AccountingViewMode
         "范围内有效行 ${mr.rows.size}；被排除无效行 ${mr.excludedInRange} 条。",
         style = MaterialTheme.typography.bodySmall,
     )
+    val chart = AccountingChartModel.from(
+        report = mr,
+        sourceRevision = state.revision,
+        loaded = state.loaded,
+        stale = state.snapshotStale,
+        busy = state.busy,
+        reviewRequired = state.reviewRequired,
+    )
+    AccountingMoneyChart(chart, AccountingCodec::money)
     val activeDays = mr.days.filter { it.income != 0L || it.expense != 0L }
     if (activeDays.isEmpty()) Text("该范围内暂无有效流水。")
     activeDays.forEach { day ->
