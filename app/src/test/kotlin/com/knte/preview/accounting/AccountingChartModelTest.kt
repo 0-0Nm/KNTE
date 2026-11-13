@@ -37,7 +37,9 @@ class AccountingChartModelTest {
                 month = "2026-02"),
             "r", true, false, false, false,
         )
-        assertEquals(listOf("2026-02-02"), model.points.map { it.date })
+        assertEquals(listOf("2026-02-01", "2026-02-02", "2026-02-03"), model.points.map { it.date })
+        assertEquals(listOf(0L, 300L, 0L), model.points.map { it.income })
+        assertEquals(listOf(0L, 25L, 0L), model.points.map { it.expense })
         assertEquals(300L, model.incomeTotal)
         assertEquals(25L, model.expenseTotal)
     }

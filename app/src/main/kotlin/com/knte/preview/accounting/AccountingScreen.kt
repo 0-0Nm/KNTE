@@ -307,9 +307,9 @@ private fun MonthContent(state: AccountingUiState, viewModel: AccountingViewMode
     )
     val chart = AccountingChartModel.from(
         report = mr,
-        sourceRevision = state.revision,
+        sourceRevision = state.reportRevision,
         loaded = state.loaded,
-        stale = state.snapshotStale,
+        stale = state.snapshotStale || state.reportsStale,
         busy = state.busy,
         reviewRequired = state.reviewRequired,
     )

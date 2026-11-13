@@ -91,6 +91,10 @@ data class AccountingUiState(
     val snapshotStale: Boolean = false,
     val categoryTotals: List<AccountingReports.CategoryTotal> = emptyList(),
     val reportMonth: String = "",
+    /** Report bundle identity: all report projections are published from one snapshot. */
+    val reportRevision: String? = null,
+    val reportScope: String = "",
+    val reportsStale: Boolean = false,
     val draft: AccountingForm? = null,
     val busy: Boolean = false,
     val confirmation: AccountingAppendPlan? = null,
@@ -303,8 +307,9 @@ class AccountingViewModel(
         if (s.busy) return
         if (value.length > 7) return
         if (value.isNotEmpty() && !value.matches(Regex("[0-9]{0,4}(-[0-9]{0,2})?"))) return
-        _state.update { it.copy(reportMonth = value) }
-        if (value.isEmpty() || value.matches(Regex("[0-9]{4}-(0[1-9]|1[0-2])"))) recomputeReports()
+        val valid = value.isEmpty() || value.matches(Regex("[0-9]{4}-(0[1-9]|1[0-2])"))
+        _state.update { it.copy(reportMonth = value, reportsStale = if (valid) it.reportsStale else true, error = if (valid) it.error else "报表参数无效（MONTH_INVALID），报表保持上次结果。") }
+        if (valid) recomputeReports()
     }
 
     /** 为当前明细行创建隔离追加式冲销计划；不修改草稿，且与手工计划互斥。 */
@@ -654,15 +659,23 @@ class AccountingViewModel(
         val snapshot = lastSnapshot ?: return
         try {
             val month = _state.value.reportMonth.takeIf { it.isNotEmpty() }
+            // Build every report projection first, then publish one coherent bundle.
+            // A failed/invalid scope never receives the new snapshot revision.
+            val nextMonth = AccountingReports.month(snapshot, month)
+            val nextMonthly = AccountingReports.monthlyTotals(snapshot)
+            val nextCategory = AccountingReports.categoryTotals(snapshot, month)
             _state.update {
                 it.copy(
-                    monthReport = AccountingReports.month(snapshot, month),
-                    monthlyTotals = AccountingReports.monthlyTotals(snapshot),
-                    categoryTotals = AccountingReports.categoryTotals(snapshot, month),
+                    monthReport = nextMonth,
+                    monthlyTotals = nextMonthly,
+                    categoryTotals = nextCategory,
+                    reportRevision = snapshot.revision,
+                    reportScope = month.orEmpty(),
+                    reportsStale = false,
                 )
             }
         } catch (e: IllegalArgumentException) {
-            _state.update { it.copy(error = "报表参数无效（${e.message}），报表保持上次结果。") }
+            _state.update { it.copy(reportsStale = true, error = "报表参数无效（${e.message}），报表保持上次结果。") }
         }
     }
 }
