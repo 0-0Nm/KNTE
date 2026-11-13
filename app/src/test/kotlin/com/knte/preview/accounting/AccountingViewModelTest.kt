@@ -797,7 +797,7 @@ class AccountingViewModelTest {
         assertEquals(expected, vm.state.value.reviewSummary)
         assertTrue(handle.keys().any { it.contains("reviewSummary") })
 
-        val rebuilt = AccountingViewModel({ ledger }, SavedStateHandle(handle.snapshot()), StandardTestDispatcher(testScheduler))
+        val rebuilt = AccountingViewModel({ ledger }, SavedStateHandle(handle.keys().associateWith { key -> handle.get<Any?>(key) }), StandardTestDispatcher(testScheduler))
         try {
             advanceUntilIdle()
             assertTrue(rebuilt.state.value.reviewRequired)
