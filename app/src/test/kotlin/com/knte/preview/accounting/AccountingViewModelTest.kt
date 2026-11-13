@@ -671,6 +671,61 @@ class AccountingViewModelTest {
     }
 
     @Test
+    fun alreadyWrittenUsesCoreExistingIdentityAndLeavesOnePhysicalRow() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("knte-accounting-already-written-").toFile()
+        val ledger = IsolatedAccountingLedger(root)
+        val id = "r-0123abcd"
+        val ts = "2026-11-13T18:00:00"
+        try {
+            val seeded = AccountingDraft.prepare(
+                id = id, date = "2026-11-13", amountText = "12.50", income = false,
+                category = "餐饮", location = "本地", note = "原记录", rawInput = "seed lunch",
+            )
+            val seedPlan = ledger.prepareManual(seeded, ts)
+            ledger.confirm(seedPlan, seedPlan.confirmation)
+            val beforeBytes = root.resolve("db/accounting.jsonl").readBytes()
+            val before = ledger.load()
+            val handle = SavedStateHandle(mapOf(
+                "knte.isolated.accounting.draft" to true,
+                "knte.isolated.accounting.id" to id,
+                "knte.isolated.accounting.date" to "2026-11-13",
+                "knte.isolated.accounting.income" to false,
+                "knte.isolated.accounting.amountText" to "12.50",
+                "knte.isolated.accounting.category" to "餐饮",
+                "knte.isolated.accounting.location" to "本地",
+                "knte.isolated.accounting.note" to "原记录",
+                "knte.isolated.accounting.rawInput" to "seed lunch",
+            ))
+            val vm = AccountingViewModel({ ledger }, handle, dispatcher)
+            try {
+                advanceUntilIdle()
+                vm.prepare()
+                advanceUntilIdle()
+                val prepared = vm.state.value.confirmation!!
+                assertTrue(prepared.ts.matches(Regex("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}")))
+                assertNotEquals(ts, prepared.ts)
+                vm.commit()
+                advanceUntilIdle()
+                val after = ledger.load()
+                assertEquals(1, after.rows.size)
+                assertArrayEquals(beforeBytes, root.resolve("db/accounting.jsonl").readBytes())
+                assertEquals(before.revision, after.revision)
+                assertNull(vm.state.value.draft)
+                assertFalse(vm.state.value.busy)
+                assertFalse(vm.state.value.reviewRequired)
+                assertNull(vm.state.value.error)
+                assertEquals("ts:$ts", vm.state.value.rows.single().viewKey)
+            } finally {
+                vm.viewModelScope.cancel()
+            }
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
     fun reversalPrepareShowsFrozenBindingAndKeepsNoBusinessWrite() = runVm { vm, ledger, root, _ ->
         seedActiveRow(ledger)
         vm.reload(); advanceUntilIdle()

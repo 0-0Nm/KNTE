@@ -430,15 +430,47 @@ class AccountingViewModel(
                         income = reread.income, expense = reread.expense, net = reread.net,
                     ) }
                 } else {
-                    val row = reread.byTimestamp(plan.ts)
-                    check(row != null && row.id == plan.id && row.active) { "独立重读未找到该笔有效记录" }
+                    val row = when (result) {
+                        is AccountingConfirmResult.Confirmed -> {
+                            val confirmed = reread.byTimestamp(plan.ts)
+                            check(confirmed != null && confirmed.id == plan.id && confirmed.active) {
+                                "独立重读未找到该笔有效记录"
+                            }
+                            confirmed
+                        }
+                        is AccountingConfirmResult.AlreadyWritten -> {
+                            // 幂等回执不能按 plan.ts 猜测身份：只信 core 返回的 existing 行，
+                            // 再用独立重读确认稳定 id/viewKey/实际 ts、完整字段和原始字节。
+                            val existing = result.existing
+                            val expected = frozenSummary
+                            val expectedCents = expected.amountCents
+                            val expectedDate = s.draft?.date
+                            val rereadRow = reread.byTimestamp(existing.ts)
+                            check(result.snapshot.revision == reread.revision &&
+                                result.snapshot.rawBytes().contentEquals(reread.rawBytes()) &&
+                                rereadRow != null && rereadRow.id == existing.id &&
+                                rereadRow.viewKey == existing.viewKey && rereadRow.ts == existing.ts &&
+                                existing.id == plan.id && existing.viewKey == "ts:${existing.ts}" &&
+                                existing.valid && existing.source == AccountingCodec.SOURCE_MANUAL &&
+                                existing.active && existing.correctedOf.isEmpty() &&
+                                expectedCents != null && existing.cents == expectedCents &&
+                                (expectedDate != null && existing.date == expectedDate) &&
+                                existing.category == expected.category &&
+                                existing.location == expected.location && existing.note == expected.note &&
+                                existing.rawInput == expected.rawInput &&
+                                existing.rawBytes().contentEquals(rereadRow.rawBytes())) {
+                                "MANUAL_ALREADY_WRITTEN_IDENTITY_DRIFT"
+                            }
+                            rereadRow
+                        }
+                    }
                     lastSnapshot = reread
                     clearDraftKeys()
                     clearReviewSummary()
                     handle[PREFIX + "writing"] = false
                     val message = when (result) {
                         is AccountingConfirmResult.Confirmed -> "已写入App私有隔离验证库并独立重读确认；非正式账本，未接真实数据。"
-                        is AccountingConfirmResult.AlreadyWritten -> "该笔此前已写入（幂等确认），已独立重读确认，未重复追加。"
+                        is AccountingConfirmResult.AlreadyWritten -> "该笔此前已写入（幂等确认），已用core回执身份并独立重读确认，未重复追加。"
                     }
                     _state.update { it.copy(
                         busy = false, draft = null, reviewSummary = null, error = null, notice = message,
