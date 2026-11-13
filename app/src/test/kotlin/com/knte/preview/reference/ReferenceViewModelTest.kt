@@ -93,4 +93,28 @@ class ReferenceViewModelTest {
         assertTrue(card.label.contains("review"))
     }
 
+    @Test fun failedCancelKeepsLockAcrossReloadAndBlocksSecondDiscard()=runVm{vm,f->
+        advanceUntilIdle();vm.begin(ReferencePool.MEMO);vm.change(title="keep")
+        vm.prepareCreate();advanceUntilIdle()
+        val c=vm.state.value.confirmation!!;f().confirm(c.plan,c.plan.confirmation)
+        var navigated=false
+        vm.discard{navigated=true};advanceUntilIdle()
+        assertTrue(vm.state.value.error!!.contains("取消失败"))
+        vm.discard{navigated=true};vm.reload();advanceUntilIdle()
+        assertFalse(navigated);assertTrue(vm.state.value.reviewRequired);assertEquals("keep",vm.state.value.draft?.title)
+    }
+    @Test fun confirmExceptionNeverInfersNotWrittenFromMessage()=runVm{vm,f->
+        advanceUntilIdle();vm.begin(ReferencePool.MEMO);vm.change(title="keep")
+        vm.prepareCreate();advanceUntilIdle()
+        val c=vm.state.value.confirmation!!;f().cancel(c.plan)
+        vm.confirm();advanceUntilIdle()
+        assertTrue(vm.state.value.error!!.contains("写入结果未知"));assertTrue(vm.state.value.reviewRequired)
+        assertEquals("keep",vm.state.value.draft?.title)
+    }
+    @Test fun cancelledPlanFeedbackDescribesDurableRecord()=runVm{vm,_->
+        advanceUntilIdle();vm.begin(ReferencePool.MEMO);vm.change(title="keep")
+        vm.prepareCreate();advanceUntilIdle();vm.dismissConfirmation();advanceUntilIdle()
+        assertTrue(vm.state.value.notice!!.contains("隔离库已记录取消状态"))
+        assertFalse(vm.state.value.reviewRequired);assertEquals("keep",vm.state.value.draft?.title)
+    }
 }
