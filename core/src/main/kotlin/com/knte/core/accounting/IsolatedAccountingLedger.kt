@@ -9,11 +9,15 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
+import java.util.IdentityHashMap
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /** Two-phase append plan. Binds destination dataset, pre-state hash (null = file absent),
- * post-state hash, and the exact appended line; `confirmation` is the single-use key. */
+ * post-state hash, and the exact appended line; `confirmation` is a content fingerprint kept
+ * for the confirm() caller challenge, NOT the authorization key. Plan lifecycle state is
+ * bound to the exact issued object identity, so a deterministically equal plan constructed
+ * outside prepareManual/prepareReversal is never authorized by an existing registration. */
 class AccountingAppendPlan internal constructor(
     internal val rootId: String,
     val dataset: String,
@@ -88,7 +92,12 @@ class IsolatedAccountingLedger internal constructor(
     private val journalDir: Path = dbDir.resolve(".journal")
     private val pending: Path = dbDir.resolve("accounting.jsonl.pending")
     private val mutex = locks.computeIfAbsent(root.toString()) { Any() }
-    private val states = HashMap<String, PlanState>()
+
+    /** Plan lifecycle bound to the EXACT issued plan object (identity, not content). A
+     * deterministically-equal plan copy has no registration here and stays UNKNOWN, so it can
+     * never revive a cancelled handle, hijack another instance's plan, or carry altered
+     * metadata across the write boundary. Registration keys are also rootId-checked. */
+    private val states = HashMap<AccountingAppendPlan, PlanState>()
 
     private enum class PlanState { PENDING, CONFIRMED, CANCELLED }
 
@@ -112,9 +121,9 @@ class IsolatedAccountingLedger internal constructor(
     fun planState(plan: AccountingAppendPlan): AccountingPlanState = synchronized(mutex) {
         when {
             plan.rootId != root.toString() -> AccountingPlanState.UNKNOWN
-            states[plan.confirmation] == null -> AccountingPlanState.UNKNOWN
-            states[plan.confirmation] == PlanState.CONFIRMED -> AccountingPlanState.CONFIRMED
-            states[plan.confirmation] == PlanState.CANCELLED -> AccountingPlanState.CANCELLED
+            states[plan] == null -> AccountingPlanState.UNKNOWN
+            states[plan] == PlanState.CONFIRMED -> AccountingPlanState.CONFIRMED
+            states[plan] == PlanState.CANCELLED -> AccountingPlanState.CANCELLED
             pendingMarkerExists() -> AccountingPlanState.PENDING_REVIEW
             else -> AccountingPlanState.PENDING
         }
@@ -131,7 +140,8 @@ class IsolatedAccountingLedger internal constructor(
     }
 
     /** THE single plan builder: every append (manual OR reversal) goes through this exact
-     * pre-state hash / after-state hash / entry line binding and is registered PENDING. */
+     * pre-state hash / after-state hash / entry line binding and is registered PENDING,
+     * keyed by the exact issued plan object. */
     private fun buildAppendPlan(
         draft: AccountingDraft,
         ts: String,
@@ -162,7 +172,8 @@ class IsolatedAccountingLedger internal constructor(
             entryKind = entryKind,
             reversal = reversalBinding,
         )
-        states[plan.confirmation] = PlanState.PENDING
+        check(states[plan] == null) { "PLAN_REGISTRATION_CONFLICT" }
+        states[plan] = PlanState.PENDING
         plan
     }
 
@@ -264,26 +275,30 @@ class IsolatedAccountingLedger internal constructor(
         )
     }
 
-    /** Cancels a pending plan; a cancelled plan can never be confirmed. */
+    /** Cancels a pending plan; a cancelled plan can never be confirmed. Only the exact
+     * issued plan object is affected; an equal-content copy stays UNKNOWN. */
     fun cancel(plan: AccountingAppendPlan): Unit = synchronized(mutex) {
         require(plan.rootId == root.toString()) { "ROOT_MISMATCH" }
         check(!pendingMarkerExists()) { "PENDING_REVIEW_REQUIRED" }
-        when (states[plan.confirmation]) {
+        when (states[plan]) {
             null -> throw IllegalStateException("PLAN_UNKNOWN")
             PlanState.CONFIRMED -> throw IllegalStateException("PLAN_ALREADY_CONFIRMED")
             PlanState.CANCELLED -> {}
-            PlanState.PENDING -> states[plan.confirmation] = PlanState.CANCELLED
+            PlanState.PENDING -> states[plan] = PlanState.CANCELLED
         }
     }
 
     fun confirm(plan: AccountingAppendPlan, confirmation: String): AccountingConfirmResult = synchronized(mutex) {
         require(plan.rootId == root.toString()) { "ROOT_MISMATCH" }
         require(confirmation == plan.confirmation) { "CONFIRMATION_MISMATCH" }
-        when (states[plan.confirmation]) {
-            null -> throw IllegalStateException("PLAN_UNKNOWN")
+        // Reject any plan that was not issued and registered by THIS instance BEFORE any
+        // business append / journal / pending write; content copies stay UNKNOWN.
+        check(states[plan] != null) { "PLAN_UNKNOWN" }
+        when (states[plan]) {
             PlanState.CONFIRMED -> throw IllegalStateException("PLAN_ALREADY_CONFIRMED")
             PlanState.CANCELLED -> throw IllegalStateException("PLAN_CANCELLED")
             PlanState.PENDING -> {}
+            null -> throw IllegalStateException("PLAN_UNKNOWN")
         }
         check(!pendingMarkerExists()) { "PENDING_REVIEW_REQUIRED" }
         safeRoot()
@@ -331,7 +346,7 @@ class IsolatedAccountingLedger internal constructor(
             if (existing.valid && existing.source == AccountingCodec.SOURCE_MANUAL &&
                 existing.correctedOf.isEmpty() && rebuilt == plan.draftToken
             ) {
-                states[plan.confirmation] = PlanState.CONFIRMED
+                states[plan] = PlanState.CONFIRMED
                 return AccountingConfirmResult.AlreadyWritten(current, existing)
             }
             throw IllegalStateException("ID_CONFLICT")
@@ -397,7 +412,7 @@ class IsolatedAccountingLedger internal constructor(
         phaseProbe("receipt-durable")
         Files.delete(pending)
         forceDir(dbDir)
-        states[plan.confirmation] = PlanState.CONFIRMED
+        states[plan] = PlanState.CONFIRMED
         val row = readback.byTimestamp(plan.ts)
         check(row != null && row.id == plan.id) { "READBACK_ROW_MISSING" }
         AccountingConfirmResult.Confirmed(readback, row, outcome)
