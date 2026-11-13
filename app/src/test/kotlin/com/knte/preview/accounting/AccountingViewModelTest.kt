@@ -728,4 +728,50 @@ class AccountingViewModelTest {
         assertTrue(vm.state.value.error?.contains("VOID_TARGET_NOT_ACTIVE") == true)
     }
 
+
+    @Test
+    fun failedCancelPersistsFrozenSummaryAcrossSavedStateRebuildWithoutConfirmation() = runVm { vm, ledger, _, handle ->
+        seedActiveRow(ledger)
+        vm.reload(); advanceUntilIdle()
+        vm.prepareReversal(vm.state.value.rows.single().viewKey); advanceUntilIdle()
+        val plan = vm.state.value.confirmation!!
+        val expected = vm.state.value.reviewSummary!!
+        ledger.confirm(plan, plan.confirmation)
+        vm.dismissConfirmation(); advanceUntilIdle()
+        assertTrue(vm.state.value.reviewRequired)
+        assertEquals(expected, vm.state.value.reviewSummary)
+        assertTrue(handle.keys().any { it.contains("reviewSummary") })
+
+        val rebuilt = AccountingViewModel({ ledger }, SavedStateHandle(handle.snapshot()), StandardTestDispatcher(testScheduler))
+        try {
+            advanceUntilIdle()
+            assertTrue(rebuilt.state.value.reviewRequired)
+            assertNull(rebuilt.state.value.confirmation)
+            assertEquals(expected, rebuilt.state.value.reviewSummary)
+        } finally {
+            rebuilt.viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun newEntryCancelsPreparedReversalBeforeCreatingManualDraft() = runVm { vm, ledger, _, _ ->
+        seedActiveRow(ledger)
+        vm.reload(); advanceUntilIdle()
+        vm.prepareReversal(vm.state.value.rows.single().viewKey); advanceUntilIdle()
+        val plan = vm.state.value.confirmation!!
+        vm.newEntry()
+        assertTrue(vm.state.value.busy)
+        assertNull(vm.state.value.confirmation)
+        advanceUntilIdle()
+        assertNotNull(vm.state.value.draft)
+        assertNull(vm.state.value.confirmation)
+        assertEquals("CANCELLED", ledger.planState(plan).name)
+        try {
+            ledger.confirm(plan, plan.confirmation)
+            fail("new entry must not leave old reversal confirmable")
+        } catch (e: IllegalStateException) {
+            assertEquals("PLAN_CANCELLED", e.message)
+        }
+    }
+
 }

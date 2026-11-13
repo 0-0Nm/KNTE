@@ -414,12 +414,14 @@ private fun ConfirmCard(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 val d = state.draft
+                val summary = state.reviewSummary
                 val r = plan.reversal
                 Text("范围：本App私有隔离验证库（合成数据），非正式账本")
                 if (r != null) {
                     Text("原记录身份：viewKey=${r.originalViewKey}\nid=${r.originalId}\nts=${r.originalTs}")
                     Text("业务日期：${r.originalDate}\n金额：${AccountingCodec.money(r.originalCents)}（${if (r.originalCents >= 0) "收入" else "支出"}）\n分类：${r.originalCategory}")
-                    Text("地点：${r.originalLocation}\n原文 raw_input：${r.originalRawInput}")
+                    Text("地点：${r.originalLocation}\n原备注：${summary?.originalNote.orEmpty()}")
+                    Text("原文 raw_input：${r.originalRawInput}")
                     Text("反向金额：${AccountingCodec.money(-r.originalCents)}\n将追加一条关联冲销记录，原记录保留；不删除、不覆盖历史。")
                     Text("绑定：sourceRevision=${r.sourceRevision}\n基线净额=${AccountingCodec.money(r.baselineNet)}，基线有效行=${r.baselineEffectiveRows}", style = MaterialTheme.typography.bodySmall)
                 } else {
@@ -428,7 +430,7 @@ private fun ConfirmCard(
                     val amount = d?.let { runCatching { AccountingCodec.money(AccountingCodec.centsOf(BigDecimal(it.amountText), it.income)) }.getOrDefault(it.amountText) } ?: ""
                     Text("金额：$amount（${if (d?.income == true) "收入" else "支出"}；分值精确，不经Double）")
                     if (!d?.location.isNullOrEmpty()) Text("地点：${d?.location}")
-                    if (!d?.note.isNullOrEmpty()) Text("备注：${d?.note}")
+                    Text("原备注：${summary?.note.orEmpty()}")
                     Text("原文 raw_input：${d?.rawInput ?: ""}")
                 }
                 Text("写入时间戳：${plan.ts}\n写入前行数：${plan.rowCountBefore}")

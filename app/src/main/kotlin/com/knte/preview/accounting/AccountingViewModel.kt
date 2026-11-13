@@ -32,6 +32,10 @@ private const val MAX_AMOUNT_TEXT_CHARS = 12
 private const val CANCEL_INTENT_KEY = PREFIX + "cancelling"
 /** reload 失败时把当前读取错误码追加在原不明结果提示之后；用固定分隔符避免重复叠加。 */
 private const val READ_ERROR_SEPARATOR = "；当前读取错误："
+/** 只读摘要使用 SavedStateHandle 的受限原语；超预算宁可不写摘要，也绝不放松 review lock。 */
+private const val SUMMARY_PREFIX = PREFIX + "reviewSummary."
+private const val SUMMARY_STATUS_KEY = SUMMARY_PREFIX + "status"
+private const val MAX_SUMMARY_UTF16_UNITS = 12000
 
 /** 新流水草稿的表单字段。id 在开始草稿时生成一次；金额保持文本，直到核对时才经
  * BigDecimal 按分精确转换（全程不经 Double）。raw_input 原样保留，不做任何解析。 */
@@ -153,6 +157,17 @@ class AccountingViewModel(
                 _state.update { it.copy(notice = "草稿超出可恢复上限，未恢复；已写流水不受影响。") }
             }
         }
+        val restoredSummary = restoreReviewSummary()
+        if (restoredSummary != null) {
+            _state.update {
+                it.copy(
+                    reviewSummary = restoredSummary,
+                    confirmation = null,
+                    reviewRequired = true,
+                    notice = "已恢复只读核对摘要；旧确认不会恢复，需人工核对隔离库。",
+                )
+            }
+        }
         val writeIntent = handle.get<Boolean>(PREFIX + "writing") == true
         val cancelIntent = handle.get<Boolean>(CANCEL_INTENT_KEY) == true
         if (writeIntent || cancelIntent) {
@@ -210,7 +225,12 @@ class AccountingViewModel(
     fun newEntry() {
         val s = _state.value
         if (s.busy || s.draft != null || s.reviewRequired) return
-        saveDraft(AccountingForm.new())
+        // reversal plan 与 manual draft 互斥：替换前必须收到真实 cancel 回执。
+        if (s.confirmation != null) {
+            cancelThen { saveDraft(AccountingForm.new()) }
+        } else {
+            saveDraft(AccountingForm.new())
+        }
     }
 
     fun dateChanged(value: String) {
@@ -324,7 +344,9 @@ class AccountingViewModel(
                     binding.originalLocation == frozenTarget.location && binding.originalRawInput == frozenTarget.rawInput) {
                     "REVERSAL_REVIEW_BINDING_MISMATCH"
                 }
-                _state.update { it.copy(busy = false, confirmation = plan, reviewSummary = summaryFor(plan, frozenTarget)) }
+                val summary = summaryFor(plan, frozenTarget)
+                persistReviewSummary(summary, "CONFIRMABLE")
+                _state.update { it.copy(busy = false, confirmation = plan, reviewSummary = summary) }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 _state.update { it.copy(busy = false, error = "未写入，冲销计划失败：${describe(e)}") }
@@ -352,7 +374,9 @@ class AccountingViewModel(
                     )
                     ledger().prepareManual(draft)
                 }
-                _state.update { it.copy(busy = false, confirmation = plan, reviewSummary = summaryFor(plan, null, d)) }
+                val summary = summaryFor(plan, null, d)
+                persistReviewSummary(summary, "CONFIRMABLE")
+                _state.update { it.copy(busy = false, confirmation = plan, reviewSummary = summary) }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 _state.update { it.copy(busy = false, error = "未写入，核对计划失败：${describe(e)}") }
@@ -370,6 +394,7 @@ class AccountingViewModel(
         if (s.busy || s.reviewRequired) return
         handle[PREFIX + "writing"] = true
         val frozenSummary = s.reviewSummary ?: summaryFor(plan, s.rows.firstOrNull { it.ts == plan.reversal?.originalTs }, s.draft)
+        persistReviewSummary(frozenSummary, "WRITING")
         _state.update { it.copy(busy = true, confirmation = null, reviewSummary = frozenSummary) }
         viewModelScope.launch {
             try {
@@ -396,6 +421,7 @@ class AccountingViewModel(
                     }
                     lastSnapshot = reread
                     clearDraftKeys()
+                    clearReviewSummary()
                     handle[PREFIX + "writing"] = false
                     _state.update { it.copy(
                         busy = false, draft = null, reviewSummary = null, error = null, reversalOutcome = outcome,
@@ -408,6 +434,7 @@ class AccountingViewModel(
                     check(row != null && row.id == plan.id && row.active) { "独立重读未找到该笔有效记录" }
                     lastSnapshot = reread
                     clearDraftKeys()
+                    clearReviewSummary()
                     handle[PREFIX + "writing"] = false
                     val message = when (result) {
                         is AccountingConfirmResult.Confirmed -> "已写入App私有隔离验证库并独立重读确认；非正式账本，未接真实数据。"
@@ -422,6 +449,7 @@ class AccountingViewModel(
                 recomputeReports()
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
+                persistReviewSummary(_state.value.reviewSummary, "WRITE_UNKNOWN")
                 _state.update { it.copy(
                     busy = false, reviewRequired = true,
                     error = "写入结果未确认：${describe(e)}；请保留草稿并核对隔离库，不会自动重试。",
@@ -462,12 +490,14 @@ class AccountingViewModel(
         // cancel 开始前先在 handle 落独立 intent：飞行中 scope 销毁也能持久保留。
         handle[CANCEL_INTENT_KEY] = true
         val frozenSummary = s.reviewSummary ?: summaryFor(plan, s.rows.firstOrNull { it.ts == plan.reversal?.originalTs }, s.draft)
+        persistReviewSummary(frozenSummary, "CANCELLING")
         _state.update { it.copy(busy = true, confirmation = null, reviewSummary = frozenSummary) }
         viewModelScope.launch {
             try {
                 withContext(ioDispatcher) { ledger().cancel(plan) }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
+                persistReviewSummary(_state.value.reviewSummary, "CANCEL_UNKNOWN")
                 _state.update {
                     it.copy(
                         busy = false,
@@ -479,6 +509,7 @@ class AccountingViewModel(
             }
             // 仅 cancel 真正成功才清 intent；失败与 scope 取消均保留。
             handle[CANCEL_INTENT_KEY] = false
+            clearReviewSummary()
             _state.update { it.copy(busy = false, reviewSummary = null) }
             next()
         }
@@ -509,6 +540,75 @@ class AccountingViewModel(
                 category = target?.category ?: draft?.category, location = target?.location ?: draft?.location,
                 note = target?.note ?: draft?.note, rawInput = target?.rawInput ?: draft?.rawInput)
         }
+
+    private fun persistReviewSummary(summary: AccountingReviewSummary?, status: String) {
+        if (summary == null) return
+        val values = listOf(
+            summary.entryKind.name, summary.id, summary.ts, summary.beforeRevision.orEmpty(), summary.afterRevision,
+            summary.originalViewKey.orEmpty(), summary.originalId.orEmpty(), summary.originalTs.orEmpty(),
+            summary.originalCents?.toString().orEmpty(), summary.originalDate.orEmpty(), summary.originalCategory.orEmpty(),
+            summary.originalLocation.orEmpty(), summary.originalNote.orEmpty(), summary.originalRawInput.orEmpty(),
+            summary.amountCents?.toString().orEmpty(), summary.category.orEmpty(), summary.location.orEmpty(),
+            summary.note.orEmpty(), summary.rawInput.orEmpty(), status,
+        )
+        if (values.sumOf { it.length } > MAX_SUMMARY_UTF16_UNITS) {
+            // 不清已有锁；缺摘要时恢复仍 reviewRequired=true，避免产生虚假可提交状态。
+            return
+        }
+        handle[SUMMARY_STATUS_KEY] = status
+        handle[SUMMARY_PREFIX + "entryKind"] = summary.entryKind.name
+        handle[SUMMARY_PREFIX + "id"] = summary.id
+        handle[SUMMARY_PREFIX + "ts"] = summary.ts
+        handle[SUMMARY_PREFIX + "beforeRevision"] = summary.beforeRevision
+        handle[SUMMARY_PREFIX + "afterRevision"] = summary.afterRevision
+        handle[SUMMARY_PREFIX + "originalViewKey"] = summary.originalViewKey
+        handle[SUMMARY_PREFIX + "originalId"] = summary.originalId
+        handle[SUMMARY_PREFIX + "originalTs"] = summary.originalTs
+        handle[SUMMARY_PREFIX + "originalCents"] = summary.originalCents
+        handle[SUMMARY_PREFIX + "originalDate"] = summary.originalDate
+        handle[SUMMARY_PREFIX + "originalCategory"] = summary.originalCategory
+        handle[SUMMARY_PREFIX + "originalLocation"] = summary.originalLocation
+        handle[SUMMARY_PREFIX + "originalNote"] = summary.originalNote
+        handle[SUMMARY_PREFIX + "originalRawInput"] = summary.originalRawInput
+        handle[SUMMARY_PREFIX + "amountCents"] = summary.amountCents
+        handle[SUMMARY_PREFIX + "category"] = summary.category
+        handle[SUMMARY_PREFIX + "location"] = summary.location
+        handle[SUMMARY_PREFIX + "note"] = summary.note
+        handle[SUMMARY_PREFIX + "rawInput"] = summary.rawInput
+    }
+
+    private fun restoreReviewSummary(): AccountingReviewSummary? {
+        val kind = handle.get<String>(SUMMARY_PREFIX + "entryKind") ?: return null
+        val entryKind = runCatching { AccountingEntryKind.valueOf(kind) }.getOrNull() ?: return null
+        val id = handle.get<String>(SUMMARY_PREFIX + "id") ?: return null
+        val ts = handle.get<String>(SUMMARY_PREFIX + "ts") ?: return null
+        val after = handle.get<String>(SUMMARY_PREFIX + "afterRevision") ?: return null
+        return AccountingReviewSummary(
+            entryKind = entryKind, id = id, ts = ts,
+            beforeRevision = handle.get<String>(SUMMARY_PREFIX + "beforeRevision"), afterRevision = after,
+            originalViewKey = handle.get<String>(SUMMARY_PREFIX + "originalViewKey"),
+            originalId = handle.get<String>(SUMMARY_PREFIX + "originalId"),
+            originalTs = handle.get<String>(SUMMARY_PREFIX + "originalTs"),
+            originalCents = handle.get<Long>(SUMMARY_PREFIX + "originalCents"),
+            originalDate = handle.get<String>(SUMMARY_PREFIX + "originalDate"),
+            originalCategory = handle.get<String>(SUMMARY_PREFIX + "originalCategory"),
+            originalLocation = handle.get<String>(SUMMARY_PREFIX + "originalLocation"),
+            originalNote = handle.get<String>(SUMMARY_PREFIX + "originalNote"),
+            originalRawInput = handle.get<String>(SUMMARY_PREFIX + "originalRawInput"),
+            amountCents = handle.get<Long>(SUMMARY_PREFIX + "amountCents"),
+            category = handle.get<String>(SUMMARY_PREFIX + "category"),
+            location = handle.get<String>(SUMMARY_PREFIX + "location"),
+            note = handle.get<String>(SUMMARY_PREFIX + "note"),
+            rawInput = handle.get<String>(SUMMARY_PREFIX + "rawInput"),
+        )
+    }
+
+    private fun clearReviewSummary() {
+        listOf("status", "entryKind", "id", "ts", "beforeRevision", "afterRevision", "originalViewKey",
+            "originalId", "originalTs", "originalCents", "originalDate", "originalCategory", "originalLocation",
+            "originalNote", "originalRawInput", "amountCents", "category", "location", "note", "rawInput")
+            .forEach { handle.remove<Any?>(SUMMARY_PREFIX + it) }
+    }
 
     private fun clearDraftKeys() {
         listOf(
