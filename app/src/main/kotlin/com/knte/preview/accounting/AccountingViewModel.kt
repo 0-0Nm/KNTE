@@ -95,6 +95,8 @@ data class AccountingUiState(
     val reportRevision: String? = null,
     val reportScope: String = "",
     val reportsStale: Boolean = false,
+    /** Explicit report-input error source; cleared only by a successful matching report. */
+    val reportInputError: String? = null,
     val draft: AccountingForm? = null,
     val busy: Boolean = false,
     val confirmation: AccountingAppendPlan? = null,
@@ -199,16 +201,23 @@ class AccountingViewModel(
             try {
                 val snapshot = withContext(ioDispatcher) { ledger().load() }
                 lastSnapshot = snapshot
+                val current = _state.value
+                val validScope = current.reportMonth.isEmpty() || current.reportMonth.matches(Regex("[0-9]{4}-(0[1-9]|1[0-2])"))
+                val bundle = if (validScope) reportBundle(snapshot, current.reportMonth.takeIf { it.isNotEmpty() }) else null
                 _state.update { s ->
-                    s.copy(
+                    val next = s.copy(
                         loaded = true, busy = false, snapshotStale = false,
                         rows = snapshot.rows, findings = snapshot.findings,
                         revision = snapshot.revision,
                         income = snapshot.income, expense = snapshot.expense, net = snapshot.net,
                         error = if (s.reviewRequired) s.error?.substringBefore(READ_ERROR_SEPARATOR) else null,
                     )
+                    if (bundle == null) next.copy(reportsStale = true) else next.copy(
+                        monthReport = bundle.month, monthlyTotals = bundle.monthly, categoryTotals = bundle.category,
+                        reportRevision = snapshot.revision, reportScope = current.reportMonth, reportsStale = false,
+                        reportInputError = null,
+                    )
                 }
-                recomputeReports()
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 val readCode = describe(e)
@@ -217,7 +226,7 @@ class AccountingViewModel(
                         s.error?.substringBefore(READ_ERROR_SEPARATOR) ?: "上次结果尚无确认回执"
                     } else null
                     s.copy(
-                        busy = false, snapshotStale = lastSnapshot != null,
+                        busy = false, snapshotStale = lastSnapshot != null, reportsStale = lastSnapshot != null,
                         error = if (base != null) "$base$READ_ERROR_SEPARATOR$readCode"
                         else "隔离库读取失败，未视为空库：$readCode",
                     )
@@ -308,7 +317,13 @@ class AccountingViewModel(
         if (value.length > 7) return
         if (value.isNotEmpty() && !value.matches(Regex("[0-9]{0,4}(-[0-9]{0,2})?"))) return
         val valid = value.isEmpty() || value.matches(Regex("[0-9]{4}-(0[1-9]|1[0-2])"))
-        _state.update { it.copy(reportMonth = value, reportsStale = if (valid) it.reportsStale else true, error = if (valid) it.error else "报表参数无效（MONTH_INVALID），报表保持上次结果。") }
+        _state.update { it.copy(
+            reportMonth = value,
+            reportsStale = if (valid) it.reportsStale else true,
+            reportInputError = if (valid) null else "报表参数无效（MONTH_INVALID），报表保持上次结果。",
+            error = if (valid) it.error?.takeUnless { e -> e.contains("MONTH_INVALID") }
+                else if (it.error == null || it.error.contains("MONTH_INVALID")) "报表参数无效（MONTH_INVALID），报表保持上次结果。" else it.error,
+        ) }
         if (valid) recomputeReports()
     }
 
@@ -433,7 +448,7 @@ class AccountingViewModel(
                         notice = "冲销已追加并由独立重读确认；原记录仍保留，当前视图按冲销链计算。App私有隔离验证库（合成数据），非正式账本。",
                         rows = reread.rows, findings = reread.findings, revision = reread.revision,
                         income = reread.income, expense = reread.expense, net = reread.net,
-                    ) }
+                    ).withReportBundle(reread) }
                 } else {
                     val row = when (result) {
                         is AccountingConfirmResult.Confirmed -> {
@@ -481,9 +496,8 @@ class AccountingViewModel(
                         busy = false, draft = null, reviewSummary = null, error = null, notice = message,
                         rows = reread.rows, findings = reread.findings, revision = reread.revision,
                         income = reread.income, expense = reread.expense, net = reread.net,
-                    ) }
+                    ).withReportBundle(reread) }
                 }
-                recomputeReports()
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 persistReviewSummary(_state.value.reviewSummary, "WRITE_UNKNOWN")
@@ -654,28 +668,44 @@ class AccountingViewModel(
         ).forEach { handle.remove<Any?>(PREFIX + it) }
     }
 
-    /** 报表只从已加载的真实快照生成；月份参数非法时保持上次结果。 */
+    private data class ReportBundle(
+        val month: AccountingReports.MonthReport,
+        val monthly: List<AccountingReports.MonthTotal>,
+        val category: List<AccountingReports.CategoryTotal>,
+    )
+
+    private fun reportBundle(snapshot: AccountingSnapshot, month: String?): ReportBundle = ReportBundle(
+        AccountingReports.month(snapshot, month),
+        AccountingReports.monthlyTotals(snapshot),
+        AccountingReports.categoryTotals(snapshot, month),
+    )
+
+    private fun AccountingUiState.withReportBundle(snapshot: AccountingSnapshot): AccountingUiState {
+        val scope = reportMonth.takeIf { it.isNotEmpty() }
+        return runCatching { reportBundle(snapshot, scope) }.fold(
+            onSuccess = { b -> copy(
+                monthReport = b.month, monthlyTotals = b.monthly, categoryTotals = b.category,
+                reportRevision = snapshot.revision, reportScope = reportMonth, reportsStale = false,
+                reportInputError = null,
+            ) },
+            onFailure = { copy(reportsStale = true) },
+        )
+    }
+
+    /** Scope changes recalculate one report bundle; only a successful matching report clears MONTH_INVALID. */
     private fun recomputeReports() {
         val snapshot = lastSnapshot ?: return
+        val scope = _state.value.reportMonth.takeIf { it.isNotEmpty() }
         try {
-            val month = _state.value.reportMonth.takeIf { it.isNotEmpty() }
-            // Build every report projection first, then publish one coherent bundle.
-            // A failed/invalid scope never receives the new snapshot revision.
-            val nextMonth = AccountingReports.month(snapshot, month)
-            val nextMonthly = AccountingReports.monthlyTotals(snapshot)
-            val nextCategory = AccountingReports.categoryTotals(snapshot, month)
-            _state.update {
-                it.copy(
-                    monthReport = nextMonth,
-                    monthlyTotals = nextMonthly,
-                    categoryTotals = nextCategory,
-                    reportRevision = snapshot.revision,
-                    reportScope = month.orEmpty(),
-                    reportsStale = false,
-                )
-            }
+            val bundle = reportBundle(snapshot, scope)
+            _state.update { it.copy(
+                monthReport = bundle.month, monthlyTotals = bundle.monthly, categoryTotals = bundle.category,
+                reportRevision = snapshot.revision, reportScope = _state.value.reportMonth, reportsStale = false,
+                reportInputError = null,
+                error = it.error?.takeUnless { e -> e.contains("MONTH_INVALID") },
+            ) }
         } catch (e: IllegalArgumentException) {
-            _state.update { it.copy(reportsStale = true, error = "报表参数无效（${e.message}），报表保持上次结果。") }
+            _state.update { it.copy(reportsStale = true, reportInputError = "报表参数无效（${e.message}），报表保持上次结果。", error = "报表参数无效（${e.message}），报表保持上次结果。") }
         }
     }
 }

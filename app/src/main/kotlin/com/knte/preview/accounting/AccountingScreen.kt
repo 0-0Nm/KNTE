@@ -91,7 +91,7 @@ fun AccountingScreen(
             if (state.snapshotStale) {
                 Text("上次成功快照（本次读取失败，以下数据可能已过期；未装载新结果）", color = MaterialTheme.colorScheme.error)
             }
-            state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            (state.reportInputError ?: state.error)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             state.reviewSummary?.let { ReviewSummaryCard(it, state.reviewRequired) }
             state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             state.reversalOutcome?.let { outcome ->
@@ -346,9 +346,20 @@ private fun CategoryContent(state: AccountingUiState, viewModel: AccountingViewM
         supportingText = { Text(monthHint(state.reportMonth)) },
         modifier = Modifier.fillMaxWidth(),
     )
+    if (state.reportRevision == null) {
+        Text(
+            if (state.loaded) "尚无成功报表。" else "库未成功读取，不生成分类报表。",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        return
+    }
+    Text(
+        "上次成功报表范围：${state.reportScope.ifEmpty { "全量" }} · revision ${state.reportRevision.take(12)}${if (state.reportsStale) " · 旧快照/结果可能已过期" else ""}",
+        style = MaterialTheme.typography.bodySmall,
+    )
     if (state.categoryTotals.isEmpty()) {
         Text(
-            if (state.loaded) "暂无有效流水。" else "库未成功读取，不生成分类报表。",
+            if (state.reportsStale) "上次成功报表范围内暂无有效流水；当前输入未生成新范围。" else "该成功报表范围内暂无有效流水。",
             style = MaterialTheme.typography.bodySmall,
         )
         return
