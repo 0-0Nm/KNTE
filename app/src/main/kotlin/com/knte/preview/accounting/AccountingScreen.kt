@@ -85,11 +85,14 @@ fun AccountingScreen(
         ) {
             Text("记账 · 隔离验证流水", style = MaterialTheme.typography.titleLarge)
             Text(
-                "本页只读写App私有隔离验证库（合成数据），非正式账本；无真实库权限、无付费。人工录入，raw_input 原样保留，无AI解析；冲销写入本批未开放。",
+                "本页只读写App私有隔离验证库（合成数据），非正式账本；无真实库权限、无付费。人工录入，raw_input 原样保留，无AI解析。冲销仅追加一条记录，不删除历史。",
                 style = MaterialTheme.typography.bodySmall,
             )
             state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            state.reversalOutcome?.let { outcome ->
+                Text("冲销结果：原记录 ${outcome.originalTs} 已由 ${outcome.reversalTs} 消耗；净额 ${AccountingCodec.money(outcome.netBefore)} → ${AccountingCodec.money(outcome.netAfter)}，回执与修订号已独立核对。", style = MaterialTheme.typography.bodySmall)
+            }
             if (state.reviewRequired) {
                 Text("待人工核对：写入结果未知，禁止再次写入与自动重试。", color = MaterialTheme.colorScheme.error)
             }
@@ -254,7 +257,15 @@ private fun LedgerContent(
                     }
                     if (expandedRow == row.viewKey) {
                         Text("ts：${row.ts}　id：${row.id}　来源：${row.source}", style = MaterialTheme.typography.bodySmall)
-                        Text("raw_input：${row.rawInput.take(200)}", style = MaterialTheme.typography.bodySmall)
+                        Text("raw_input：${row.rawInput}", style = MaterialTheme.typography.bodySmall)
+                        if (row.valid && row.active && row.kind.name != "REVERSAL" && row.rawInput.isNotEmpty()) {
+                            Text("原记录可创建冲销计划；CORRECTION 只要有效且活动中同样允许。", style = MaterialTheme.typography.bodySmall)
+                            OutlinedButton(
+                                onClick = { viewModel.prepareReversal(row.viewKey) },
+                                enabled = !state.busy && !state.reviewRequired && state.draft == null,
+                                shape = RoundedCornerShape(3.dp),
+                            ) { Text("创建冲销计划") }
+                        }
                     }
                 }
             }
@@ -372,26 +383,32 @@ private fun ConfirmCard(
 ) {
     AlertDialog(
         onDismissRequest = viewModel::dismissConfirmation,
-        title = { Text("核对后写入隔离流水") },
+        title = { Text(if (plan.entryKind.name == "REVERSAL") "核对后追加冲销记录" else "核对后写入隔离流水") },
         text = {
             Column(
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 val d = state.draft
-                Text("范围：本App私有隔离验证库（合成数据），非正式账本\n操作：追加一行；append-only，不覆盖不删除历史")
-                Text("记录ID：${plan.id}\n业务日期：${d?.date}\n类别：${d?.category}")
-                val amount = d?.let {
-                    runCatching {
-                        AccountingCodec.money(AccountingCodec.centsOf(BigDecimal(it.amountText), it.income))
-                    }.getOrDefault(it.amountText)
-                } ?: ""
-                Text("金额：$amount（${if (d?.income == true) "收入" else "支出"}；分值精确，不经Double）")
-                if (!d?.location.isNullOrEmpty()) Text("地点：${d?.location}")
-                if (!d?.note.isNullOrEmpty()) Text("备注：${d?.note}")
-                Text("原文 raw_input：${d?.rawInput ?: ""}")
+                val r = plan.reversal
+                Text("范围：本App私有隔离验证库（合成数据），非正式账本")
+                if (r != null) {
+                    Text("原记录身份：viewKey=${r.originalViewKey}\nid=${r.originalId}\nts=${r.originalTs}")
+                    Text("业务日期：${r.originalDate}\n金额：${AccountingCodec.money(r.originalCents)}（${if (r.originalCents >= 0) "收入" else "支出"}）\n分类：${r.originalCategory}")
+                    Text("地点：${r.originalLocation}\n原文 raw_input：${r.originalRawInput}")
+                    Text("反向金额：${AccountingCodec.money(-r.originalCents)}\n将追加一条关联冲销记录，原记录保留；不删除、不覆盖历史。")
+                    Text("绑定：sourceRevision=${r.sourceRevision}\n基线净额=${AccountingCodec.money(r.baselineNet)}，基线有效行=${r.baselineEffectiveRows}", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    Text("操作：追加一行；append-only，不覆盖不删除历史")
+                    Text("记录ID：${plan.id}\n业务日期：${d?.date}\n类别：${d?.category}")
+                    val amount = d?.let { runCatching { AccountingCodec.money(AccountingCodec.centsOf(BigDecimal(it.amountText), it.income)) }.getOrDefault(it.amountText) } ?: ""
+                    Text("金额：$amount（${if (d?.income == true) "收入" else "支出"}；分值精确，不经Double）")
+                    if (!d?.location.isNullOrEmpty()) Text("地点：${d?.location}")
+                    if (!d?.note.isNullOrEmpty()) Text("备注：${d?.note}")
+                    Text("原文 raw_input：${d?.rawInput ?: ""}")
+                }
                 Text("写入时间戳：${plan.ts}\n写入前行数：${plan.rowCountBefore}")
-                Text("取消不会写入；确认后本计划一次性失效；请勿同时从其他途径写同一库。")
+                Text("取消只取消计划，不承诺全局零字节；确认后本计划一次性失效；请勿同时从其他途径写同一库。")
                 TextButton(onClick = onToggleHash, shape = RoundedCornerShape(3.dp)) {
                     Text(if (showHash) "收起技术详情" else "查看技术详情")
                 }

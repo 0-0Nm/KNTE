@@ -9,6 +9,8 @@ import com.knte.core.accounting.AccountingConfirmResult
 import com.knte.core.accounting.AccountingDraft
 import com.knte.core.accounting.AccountingIssue
 import com.knte.core.accounting.AccountingReports
+import com.knte.core.accounting.AccountingEntryKind
+import com.knte.core.accounting.AccountingReversalOutcome
 import com.knte.core.accounting.AccountingRow
 import com.knte.core.accounting.AccountingSnapshot
 import com.knte.core.accounting.IsolatedAccountingLedger
@@ -67,6 +69,7 @@ data class AccountingUiState(
     val error: String? = null,
     val notice: String? = null,
     val reviewRequired: Boolean = false,
+    val reversalOutcome: AccountingReversalOutcome? = null,
 ) {
     /** 是否存在未保存的草稿内容（父级统一草稿 gate 读取）。 */
     val dirty: Boolean
@@ -259,6 +262,26 @@ class AccountingViewModel(
         if (value.isEmpty() || value.matches(Regex("[0-9]{4}-(0[1-9]|1[0-2])"))) recomputeReports()
     }
 
+    /** 为当前明细行创建隔离追加式冲销计划；不修改草稿，且与手工计划互斥。 */
+    fun prepareReversal(targetKey: String) {
+        val s = _state.value
+        if (s.busy || s.reviewRequired || s.draft != null || s.confirmation != null) return
+        val target = s.rows.firstOrNull { it.viewKey == targetKey } ?: return
+        if (!target.valid || !target.active || target.kind.name == "REVERSAL" || target.rawInput.isEmpty()) return
+        _state.update { it.copy(busy = true, error = null, notice = null) }
+        viewModelScope.launch {
+            try {
+                val plan = withContext(ioDispatcher) {
+                    ledger().prepareReversal(targetKey = targetKey, sourceRevision = s.revision)
+                }
+                _state.update { it.copy(busy = false, confirmation = plan) }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                _state.update { it.copy(busy = false, error = "未写入，冲销计划失败：${describe(e)}") }
+            }
+        }
+    }
+
     fun prepare() {
         val s = _state.value
         val d = s.draft ?: return
@@ -302,33 +325,50 @@ class AccountingViewModel(
                 val current = ledger()
                 val result = withContext(ioDispatcher) { current.confirm(plan, plan.confirmation) }
                 val reread = withContext(ioDispatcher) { current.load() }
-                val row = reread.byTimestamp(plan.ts)
-                check(row != null && row.id == plan.id && row.active) { "独立重读未找到该笔有效记录" }
-                lastSnapshot = reread
-                clearDraftKeys()
-                handle[PREFIX + "writing"] = false
-                val message = when (result) {
-                    is AccountingConfirmResult.Confirmed ->
-                        "已写入App私有隔离验证库并独立重读确认；非正式账本，未接真实数据。"
-                    is AccountingConfirmResult.AlreadyWritten ->
-                        "该笔此前已写入（幂等确认），已独立重读确认，未重复追加。"
-                }
-                _state.update {
-                    it.copy(
+                if (plan.entryKind == AccountingEntryKind.REVERSAL) {
+                    val confirmed = result as? AccountingConfirmResult.Confirmed
+                    val outcome = confirmed?.reversal
+                    val original = plan.reversal
+                    check(outcome != null && original != null && confirmed.appended.ts == plan.ts) { "REVERSAL_READBACK_NOT_CONSUMED" }
+                    val originalRow = reread.byTimestamp(outcome.originalTs)
+                    val reversalRow = reread.byTimestamp(outcome.reversalTs)
+                    check(originalRow != null && !originalRow.active && reversalRow != null &&
+                        reversalRow.active && reversalRow.cents == outcome.reversalCents &&
+                        outcome.readbackRevision == reread.revision && outcome.receipt.isNotBlank()) {
+                        "REVERSAL_READBACK_NOT_CONSUMED"
+                    }
+                    lastSnapshot = reread
+                    clearDraftKeys()
+                    handle[PREFIX + "writing"] = false
+                    _state.update { it.copy(
+                        busy = false, draft = null, error = null, reversalOutcome = outcome,
+                        notice = "冲销已追加并由独立重读确认；原记录仍保留，当前视图按冲销链计算。App私有隔离验证库（合成数据），非正式账本。",
+                        rows = reread.rows, findings = reread.findings, revision = reread.revision,
+                        income = reread.income, expense = reread.expense, net = reread.net,
+                    ) }
+                } else {
+                    val row = reread.byTimestamp(plan.ts)
+                    check(row != null && row.id == plan.id && row.active) { "独立重读未找到该笔有效记录" }
+                    lastSnapshot = reread
+                    clearDraftKeys()
+                    handle[PREFIX + "writing"] = false
+                    val message = when (result) {
+                        is AccountingConfirmResult.Confirmed -> "已写入App私有隔离验证库并独立重读确认；非正式账本，未接真实数据。"
+                        is AccountingConfirmResult.AlreadyWritten -> "该笔此前已写入（幂等确认），已独立重读确认，未重复追加。"
+                    }
+                    _state.update { it.copy(
                         busy = false, draft = null, error = null, notice = message,
                         rows = reread.rows, findings = reread.findings, revision = reread.revision,
                         income = reread.income, expense = reread.expense, net = reread.net,
-                    )
+                    ) }
                 }
                 recomputeReports()
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                _state.update {
-                    it.copy(
-                        busy = false, reviewRequired = true,
-                        error = "写入结果未确认：${describe(e)}；请保留草稿并核对隔离库，不会自动重试。",
-                    )
-                }
+                _state.update { it.copy(
+                    busy = false, reviewRequired = true,
+                    error = "写入结果未确认：${describe(e)}；请保留草稿并核对隔离库，不会自动重试。",
+                ) }
             }
         }
     }
@@ -455,6 +495,12 @@ private fun describe(e: Exception): String {
         "PENDING_REVIEW_REQUIRED" -> "存在pending标记，需人工检查"
         "PRE_WRITE_VALIDATION_FAILED" -> "写入前校验失败"
         "WRITE_RESULT_UNKNOWN" -> "写入结果未知，需人工核对"
+        "VOID_TARGET_MISSING" -> "目标不存在或已失效，请重新读取"
+        "VOID_TARGET_NOT_ACTIVE" -> "目标已不是有效活动记录，不能冲销"
+        "REVERSAL_TARGET_IS_REVERSAL" -> "不能对冲销记录再次冲销"
+        "REVERSAL_TARGET_ALREADY_REVERSED" -> "目标已有冲销记录，请重新读取"
+        "REVERSAL_READBACK_NOT_CONSUMED" -> "冲销独立重读未匹配，需人工核对"
+        "REVERSAL_NET_MISMATCH" -> "冲销后净额校验不一致，需人工核对"
         else -> null
     }
     return if (text == null) code else "$code（$text）"

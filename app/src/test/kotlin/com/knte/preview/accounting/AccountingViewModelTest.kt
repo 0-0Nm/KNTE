@@ -660,4 +660,71 @@ class AccountingViewModelTest {
         assertTrue(ledger.load().rows.isEmpty())
     }
 
+    private fun seedActiveRow(ledger: IsolatedAccountingLedger, ts: String = "2026-11-13T18:00:00Z") {
+        val draft = AccountingDraft.prepare(
+            id = "seed-0123abcd", date = "2026-11-13", amountText = "12.50", income = false,
+            category = "餐饮", location = "本地", note = "原记录", rawInput = "seed lunch",
+        )
+        val plan = ledger.prepareManual(draft, ts)
+        ledger.confirm(plan, plan.confirmation)
+    }
+
+    @Test
+    fun reversalPrepareShowsFrozenBindingAndKeepsNoBusinessWrite() = runVm { vm, ledger, root, _ ->
+        seedActiveRow(ledger)
+        vm.reload(); advanceUntilIdle()
+        val row = vm.state.value.rows.single()
+        vm.prepareReversal(row.viewKey); advanceUntilIdle()
+        val plan = vm.state.value.confirmation
+        assertNotNull(plan)
+        assertEquals("REVERSAL", plan?.entryKind?.name)
+        assertEquals(row.viewKey, plan?.reversal?.originalViewKey)
+        assertEquals(row.cents, plan?.reversal?.originalCents)
+        assertEquals(1, ledger.load().rows.size)
+        assertTrue(root.resolve("db/accounting.jsonl").exists())
+    }
+
+    @Test
+    fun reversalCancelPreservesDraftlessListAndPlanCannotConfirm() = runVm { vm, ledger, _, _ ->
+        seedActiveRow(ledger)
+        vm.reload(); advanceUntilIdle()
+        vm.prepareReversal(vm.state.value.rows.single().viewKey); advanceUntilIdle()
+        val plan = vm.state.value.confirmation!!
+        vm.dismissConfirmation(); advanceUntilIdle()
+        assertNull(vm.state.value.confirmation)
+        assertEquals(1, ledger.load().rows.size)
+        try { ledger.confirm(plan, plan.confirmation); fail("cancelled reversal must not confirm") }
+        catch (e: IllegalStateException) { assertEquals("PLAN_CANCELLED", e.message) }
+    }
+
+    @Test
+    fun reversalConfirmIndependentReadbackZeroesReportsAndKeepsAuditRows() = runVm { vm, ledger, _, _ ->
+        seedActiveRow(ledger)
+        vm.reload(); advanceUntilIdle()
+        vm.prepareReversal(vm.state.value.rows.single().viewKey); advanceUntilIdle()
+        vm.commit(); advanceUntilIdle()
+        val s = vm.state.value
+        assertFalse(s.reviewRequired)
+        assertNotNull(s.reversalOutcome)
+        assertEquals(2, s.rows.size)
+        assertEquals(0L, s.net)
+        assertEquals(0L, s.monthReport?.net)
+        assertTrue(s.notice?.contains("原记录仍保留") == true)
+        assertEquals(2, ledger.load().rows.size)
+    }
+
+    @Test
+    fun alreadyReversedTargetFailsClosedAndLocksReview() = runVm { vm, ledger, _, _ ->
+        seedActiveRow(ledger)
+        val first = ledger.load().rows.single()
+        val plan = ledger.prepareReversal(first.viewKey, "2026-11-13T18:01:00Z")
+        ledger.confirm(plan, plan.confirmation)
+        vm.reload(); advanceUntilIdle()
+        assertTrue(vm.state.value.rows.none { it.viewKey == first.viewKey && it.active })
+        vm.prepareReversal(first.viewKey); advanceUntilIdle()
+        assertNull(vm.state.value.confirmation)
+        assertFalse(vm.state.value.reviewRequired)
+        assertNotNull(vm.state.value.error)
+    }
+
 }
