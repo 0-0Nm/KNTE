@@ -88,7 +88,11 @@ fun AccountingScreen(
                 "本页只读写App私有隔离验证库（合成数据），非正式账本；无真实库权限、无付费。人工录入，raw_input 原样保留，无AI解析。冲销仅追加一条记录，不删除历史。",
                 style = MaterialTheme.typography.bodySmall,
             )
+            if (state.snapshotStale) {
+                Text("上次成功快照（本次读取失败，以下数据可能已过期；未装载新结果）", color = MaterialTheme.colorScheme.error)
+            }
             state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            state.reviewSummary?.let { ReviewSummaryCard(it, state.reviewRequired) }
             state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             state.reversalOutcome?.let { outcome ->
                 Text("冲销结果：原记录 ${outcome.originalTs} 已由 ${outcome.reversalTs} 消耗；净额 ${AccountingCodec.money(outcome.netBefore)} → ${AccountingCodec.money(outcome.netAfter)}，回执与修订号已独立核对。", style = MaterialTheme.typography.bodySmall)
@@ -369,6 +373,26 @@ private fun FindingsDisclosure(findings: List<AccountingIssue>, expanded: Boolea
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ReviewSummaryCard(summary: AccountingReviewSummary, locked: Boolean) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(if (locked) "只读冻结核对摘要（授权已失效）" else "当前核对摘要", style = MaterialTheme.typography.titleSmall)
+        Text("${if (summary.entryKind.name == "REVERSAL") "冲销" else "手工流水"} · id=${summary.id} · ts=${summary.ts}")
+        if (summary.entryKind.name == "REVERSAL") {
+            Text("原记录：${summary.originalId} / ${summary.originalTs} / ${summary.originalCents?.let { AccountingCodec.money(it) } ?: "未知"}")
+            Text("业务日期：${summary.originalDate} · 分类：${summary.originalCategory}")
+            Text("地点：${summary.originalLocation.orEmpty()} · 原备注：${summary.originalNote.orEmpty()}")
+            Text("原文 raw_input：${summary.originalRawInput.orEmpty()}")
+            Text("绑定 sourceRevision：${summary.beforeRevision ?: "未知"}")
+        } else {
+            Text("金额：${summary.amountCents?.let { AccountingCodec.money(it) } ?: "未解析"} · 分类：${summary.category.orEmpty()}")
+            Text("地点：${summary.location.orEmpty()} · 备注：${summary.note.orEmpty()}")
+            Text("原文 raw_input：${summary.rawInput.orEmpty()}")
+        }
+        Text("写入时间戳：${summary.ts} · 写入前修订：${summary.beforeRevision ?: "新库"}", style = MaterialTheme.typography.bodySmall)
     }
 }
 

@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
+import java.math.BigDecimal
 
 private const val PREFIX = "knte.isolated.accounting."
 private const val MAX_AMOUNT_TEXT_CHARS = 12
@@ -51,6 +52,28 @@ data class AccountingForm(
 }
 
 /** 报表数值只在真实快照加载成功后出现（读取错误不当 0：金额字段保持 null）。 */
+data class AccountingReviewSummary(
+    val entryKind: AccountingEntryKind,
+    val id: String,
+    val ts: String,
+    val beforeRevision: String?,
+    val afterRevision: String,
+    val originalViewKey: String? = null,
+    val originalId: String? = null,
+    val originalTs: String? = null,
+    val originalCents: Long? = null,
+    val originalDate: String? = null,
+    val originalCategory: String? = null,
+    val originalLocation: String? = null,
+    val originalNote: String? = null,
+    val originalRawInput: String? = null,
+    val amountCents: Long? = null,
+    val category: String? = null,
+    val location: String? = null,
+    val note: String? = null,
+    val rawInput: String? = null,
+)
+
 data class AccountingUiState(
     val loaded: Boolean = false,
     val rows: List<AccountingRow> = emptyList(),
@@ -61,11 +84,13 @@ data class AccountingUiState(
     val net: Long? = null,
     val monthReport: AccountingReports.MonthReport? = null,
     val monthlyTotals: List<AccountingReports.MonthTotal> = emptyList(),
+    val snapshotStale: Boolean = false,
     val categoryTotals: List<AccountingReports.CategoryTotal> = emptyList(),
     val reportMonth: String = "",
     val draft: AccountingForm? = null,
     val busy: Boolean = false,
     val confirmation: AccountingAppendPlan? = null,
+    val reviewSummary: AccountingReviewSummary? = null,
     val error: String? = null,
     val notice: String? = null,
     val reviewRequired: Boolean = false,
@@ -157,7 +182,7 @@ class AccountingViewModel(
                 lastSnapshot = snapshot
                 _state.update { s ->
                     s.copy(
-                        loaded = true, busy = false,
+                        loaded = true, busy = false, snapshotStale = false,
                         rows = snapshot.rows, findings = snapshot.findings,
                         revision = snapshot.revision,
                         income = snapshot.income, expense = snapshot.expense, net = snapshot.net,
@@ -173,7 +198,7 @@ class AccountingViewModel(
                         s.error?.substringBefore(READ_ERROR_SEPARATOR) ?: "上次结果尚无确认回执"
                     } else null
                     s.copy(
-                        busy = false,
+                        busy = false, snapshotStale = lastSnapshot != null,
                         error = if (base != null) "$base$READ_ERROR_SEPARATOR$readCode"
                         else "隔离库读取失败，未视为空库：$readCode",
                     )
@@ -266,15 +291,40 @@ class AccountingViewModel(
     fun prepareReversal(targetKey: String) {
         val s = _state.value
         if (s.busy || s.reviewRequired || s.draft != null || s.confirmation != null) return
-        val target = s.rows.firstOrNull { it.viewKey == targetKey } ?: return
-        if (!target.valid || !target.active || target.kind.name == "REVERSAL" || target.rawInput.isEmpty()) return
+        val target = s.rows.firstOrNull { it.viewKey == targetKey }
+        if (target == null) {
+            _state.update { it.copy(error = "未写入，冲销计划失败：VOID_TARGET_MISSING（目标不存在或已失效，请重新读取）") }
+            return
+        }
+        if (!target.valid || !target.active) {
+            _state.update { it.copy(error = "未写入，冲销计划失败：VOID_TARGET_NOT_ACTIVE（目标已不是有效活动记录，不能冲销）") }
+            return
+        }
+        if (target.kind.name == "REVERSAL") {
+            _state.update { it.copy(error = "未写入，冲销计划失败：REVERSAL_TARGET_IS_REVERSAL（不能对冲销记录再次冲销）") }
+            return
+        }
+        if (target.rawInput.isEmpty()) {
+            _state.update { it.copy(error = "未写入，冲销计划失败：VOID_RAW_INPUT_MISSING（目标缺少原文）") }
+            return
+        }
+        val frozenRevision = s.revision
+        val frozenTarget = target
         _state.update { it.copy(busy = true, error = null, notice = null) }
         viewModelScope.launch {
             try {
                 val plan = withContext(ioDispatcher) {
                     ledger().prepareReversal(targetKey = targetKey, sourceRevision = s.revision)
                 }
-                _state.update { it.copy(busy = false, confirmation = plan) }
+                val binding = plan.reversal
+                check(binding != null && binding.sourceRevision == frozenRevision &&
+                    binding.originalViewKey == frozenTarget.viewKey && binding.originalId == frozenTarget.id &&
+                    binding.originalTs == frozenTarget.ts && binding.originalCents == frozenTarget.cents &&
+                    binding.originalDate == frozenTarget.date && binding.originalCategory == frozenTarget.category &&
+                    binding.originalLocation == frozenTarget.location && binding.originalRawInput == frozenTarget.rawInput) {
+                    "REVERSAL_REVIEW_BINDING_MISMATCH"
+                }
+                _state.update { it.copy(busy = false, confirmation = plan, reviewSummary = summaryFor(plan, frozenTarget)) }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 _state.update { it.copy(busy = false, error = "未写入，冲销计划失败：${describe(e)}") }
@@ -302,7 +352,7 @@ class AccountingViewModel(
                     )
                     ledger().prepareManual(draft)
                 }
-                _state.update { it.copy(busy = false, confirmation = plan) }
+                _state.update { it.copy(busy = false, confirmation = plan, reviewSummary = summaryFor(plan, null, d)) }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 _state.update { it.copy(busy = false, error = "未写入，核对计划失败：${describe(e)}") }
@@ -319,7 +369,8 @@ class AccountingViewModel(
         val plan = s.confirmation ?: return
         if (s.busy || s.reviewRequired) return
         handle[PREFIX + "writing"] = true
-        _state.update { it.copy(busy = true, confirmation = null) }
+        val frozenSummary = s.reviewSummary ?: summaryFor(plan, s.rows.firstOrNull { it.ts == plan.reversal?.originalTs }, s.draft)
+        _state.update { it.copy(busy = true, confirmation = null, reviewSummary = frozenSummary) }
         viewModelScope.launch {
             try {
                 val current = ledger()
@@ -333,7 +384,13 @@ class AccountingViewModel(
                     val originalRow = reread.byTimestamp(outcome.originalTs)
                     val reversalRow = reread.byTimestamp(outcome.reversalTs)
                     check(originalRow != null && !originalRow.active && reversalRow != null &&
-                        reversalRow.active && reversalRow.cents == outcome.reversalCents &&
+                        reversalRow.valid && reversalRow.kind == com.knte.core.accounting.AccountingKind.REVERSAL &&
+                        !reversalRow.active && reversalRow.correctedOf == original.originalTs &&
+                        reversalRow.id == plan.id && reversalRow.cents == outcome.reversalCents &&
+                        original.originalId == originalRow.id && original.originalCents == originalRow.cents &&
+                        original.originalDate == originalRow.date && original.originalCategory == originalRow.category &&
+                        original.originalLocation == originalRow.location && original.originalRawInput == originalRow.rawInput &&
+                        original.sourceRevision == plan.beforeRevision &&
                         outcome.readbackRevision == reread.revision && outcome.receipt.isNotBlank()) {
                         "REVERSAL_READBACK_NOT_CONSUMED"
                     }
@@ -341,7 +398,7 @@ class AccountingViewModel(
                     clearDraftKeys()
                     handle[PREFIX + "writing"] = false
                     _state.update { it.copy(
-                        busy = false, draft = null, error = null, reversalOutcome = outcome,
+                        busy = false, draft = null, reviewSummary = null, error = null, reversalOutcome = outcome,
                         notice = "冲销已追加并由独立重读确认；原记录仍保留，当前视图按冲销链计算。App私有隔离验证库（合成数据），非正式账本。",
                         rows = reread.rows, findings = reread.findings, revision = reread.revision,
                         income = reread.income, expense = reread.expense, net = reread.net,
@@ -357,7 +414,7 @@ class AccountingViewModel(
                         is AccountingConfirmResult.AlreadyWritten -> "该笔此前已写入（幂等确认），已独立重读确认，未重复追加。"
                     }
                     _state.update { it.copy(
-                        busy = false, draft = null, error = null, notice = message,
+                        busy = false, draft = null, reviewSummary = null, error = null, notice = message,
                         rows = reread.rows, findings = reread.findings, revision = reread.revision,
                         income = reread.income, expense = reread.expense, net = reread.net,
                     ) }
@@ -378,7 +435,7 @@ class AccountingViewModel(
             clearDraftKeys()
             _state.update {
                 it.copy(
-                    draft = null, confirmation = null, error = null,
+                    draft = null, confirmation = null, reviewSummary = null, error = null,
                     notice = "已放弃当前草稿；不修改或删除已写流水。",
                 )
             }
@@ -404,7 +461,8 @@ class AccountingViewModel(
         }
         // cancel 开始前先在 handle 落独立 intent：飞行中 scope 销毁也能持久保留。
         handle[CANCEL_INTENT_KEY] = true
-        _state.update { it.copy(busy = true, confirmation = null) }
+        val frozenSummary = s.reviewSummary ?: summaryFor(plan, s.rows.firstOrNull { it.ts == plan.reversal?.originalTs }, s.draft)
+        _state.update { it.copy(busy = true, confirmation = null, reviewSummary = frozenSummary) }
         viewModelScope.launch {
             try {
                 withContext(ioDispatcher) { ledger().cancel(plan) }
@@ -421,7 +479,7 @@ class AccountingViewModel(
             }
             // 仅 cancel 真正成功才清 intent；失败与 scope 取消均保留。
             handle[CANCEL_INTENT_KEY] = false
-            _state.update { it.copy(busy = false) }
+            _state.update { it.copy(busy = false, reviewSummary = null) }
             next()
         }
     }
@@ -438,6 +496,19 @@ class AccountingViewModel(
         handle[PREFIX + "rawInput"] = d.rawInput
         _state.update { it.copy(draft = d, confirmation = null) }
     }
+
+    private fun summaryFor(plan: AccountingAppendPlan, target: AccountingRow?, draft: AccountingForm? = null): AccountingReviewSummary =
+        if (plan.entryKind == AccountingEntryKind.REVERSAL) {
+            val r = checkNotNull(plan.reversal)
+            AccountingReviewSummary(plan.entryKind, plan.id, plan.ts, plan.beforeRevision, plan.afterRevision,
+                r.originalViewKey, r.originalId, r.originalTs, r.originalCents, r.originalDate,
+                r.originalCategory, r.originalLocation, target?.note, r.originalRawInput)
+        } else {
+            AccountingReviewSummary(plan.entryKind, plan.id, plan.ts, plan.beforeRevision, plan.afterRevision,
+                amountCents = target?.cents ?: draft?.let { runCatching { AccountingCodec.centsOf(BigDecimal(it.amountText), it.income) }.getOrNull() },
+                category = target?.category ?: draft?.category, location = target?.location ?: draft?.location,
+                note = target?.note ?: draft?.note, rawInput = target?.rawInput ?: draft?.rawInput)
+        }
 
     private fun clearDraftKeys() {
         listOf(

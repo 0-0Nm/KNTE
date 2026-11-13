@@ -2,6 +2,7 @@ package com.knte.preview.accounting
 
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
+import com.knte.core.accounting.AccountingDraft
 import com.knte.core.accounting.IsolatedAccountingLedger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -660,9 +661,9 @@ class AccountingViewModelTest {
         assertTrue(ledger.load().rows.isEmpty())
     }
 
-    private fun seedActiveRow(ledger: IsolatedAccountingLedger, ts: String = "2026-11-13T18:00:00Z") {
+    private fun seedActiveRow(ledger: IsolatedAccountingLedger, ts: String = "2026-11-13T18:00:00") {
         val draft = AccountingDraft.prepare(
-            id = "seed-0123abcd", date = "2026-11-13", amountText = "12.50", income = false,
+            id = "r-0123abcd", date = "2026-11-13", amountText = "12.50", income = false,
             category = "餐饮", location = "本地", note = "原记录", rawInput = "seed lunch",
         )
         val plan = ledger.prepareManual(draft, ts)
@@ -717,14 +718,14 @@ class AccountingViewModelTest {
     fun alreadyReversedTargetFailsClosedAndLocksReview() = runVm { vm, ledger, _, _ ->
         seedActiveRow(ledger)
         val first = ledger.load().rows.single()
-        val plan = ledger.prepareReversal(first.viewKey, "2026-11-13T18:01:00Z")
+        val plan = ledger.prepareReversal(first.viewKey, "2026-11-13T18:01:00")
         ledger.confirm(plan, plan.confirmation)
         vm.reload(); advanceUntilIdle()
         assertTrue(vm.state.value.rows.none { it.viewKey == first.viewKey && it.active })
         vm.prepareReversal(first.viewKey); advanceUntilIdle()
         assertNull(vm.state.value.confirmation)
         assertFalse(vm.state.value.reviewRequired)
-        assertNotNull(vm.state.value.error)
+        assertTrue(vm.state.value.error?.contains("VOID_TARGET_NOT_ACTIVE") == true)
     }
 
 }
