@@ -3,9 +3,11 @@ package com.knte.preview.time.overlay
 import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.graphics.Rect
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.TouchDelegate
 import android.text.Editable
 import android.text.TextWatcher
 import android.widget.Button
@@ -69,6 +71,7 @@ class TimerOverlayPanel(
         expand.setOnClickListener { emit(TimerOverlayIntent.ToggleExpanded) }
         hide.setOnClickListener { emit(TimerOverlayIntent.Hide) }
         dragHandle.setOnTouchListener(DragTouchListener())
+        post { installDragTouchDelegate() }
         project.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
@@ -88,8 +91,9 @@ class TimerOverlayPanel(
         targetList.removeAllViews()
         details.text = ""
         val snapshot = snapshotOf(next.phase)
+        val resolvedSelection = TimerOverlaySelectionResolver.resolve(next.phase)
         snapshot?.running?.forEach { target ->
-            val selected = selectedId(next.phase) == target.id
+            val selected = resolvedSelection?.id == target.id
             val item = button(if (selected) "✓ ${target.projectText} · ${target.id}" else "${target.projectText} · ${target.id}")
             item.contentDescription = "选择目标 ${target.projectText}，${target.id}，开始于 ${target.startedAtText}"
             item.isSelected = selected
@@ -106,11 +110,11 @@ class TimerOverlayPanel(
             else -> Unit
         }
         primary.text = when (next.phase) {
-            is TimerOverlayPhase.Running -> if (selectedId(next.phase) == null) "先选择目标" else "停止所选"
+            is TimerOverlayPhase.Running -> if (resolvedSelection == null) "先选择目标" else "停止所选"
             else -> "开始"
         }
         primary.isEnabled = (next.phase is TimerOverlayPhase.Idle && TimerOverlayText.projectInput(project.text.toString()).isNotBlank()) ||
-            (next.phase is TimerOverlayPhase.Running && selectedId(next.phase) != null)
+            (next.phase is TimerOverlayPhase.Running && resolvedSelection != null)
         confirm.visibility = if (next.phase is TimerOverlayPhase.PreparingStart || next.phase is TimerOverlayPhase.PreparingStop) VISIBLE else GONE
         cancel.visibility = confirm.visibility
         confirm.isEnabled = confirm.visibility == VISIBLE
@@ -125,7 +129,9 @@ class TimerOverlayPanel(
     private fun onPrimary() {
         when (val phase = rendered.phase) {
             is TimerOverlayPhase.Idle -> TimerOverlayText.projectInput(project.text.toString()).takeIf { it.isNotBlank() }?.let { emit(TimerOverlayIntent.Start(it)) }
-            is TimerOverlayPhase.Running -> selectedId(phase)?.let { emit(TimerOverlayIntent.Stop(it)) }
+            is TimerOverlayPhase.Running -> TimerOverlaySelectionResolver.resolve(phase)?.let {
+                emit(TimerOverlayIntent.Stop(it.id))
+            }
             else -> Unit
         }
     }
@@ -144,7 +150,15 @@ class TimerOverlayPanel(
         else -> null
     }
 
-    private fun selectedId(phase: TimerOverlayPhase): String? = (phase as? TimerOverlayPhase.Running)?.selectedTargetId
+    private fun installDragTouchDelegate() {
+        val bounds = Rect()
+        dragHandle.getHitRect(bounds)
+        val minimum = dp(48)
+        val extra = ((minimum - bounds.height()).coerceAtLeast(0) + 1) / 2
+        bounds.top -= extra
+        bounds.bottom += extra
+        touchDelegate = TouchDelegate(bounds, dragHandle)
+    }
 
     private fun importantA11y() {
         dragHandle.contentDescription = "拖动悬浮窗，不会触发计时操作"

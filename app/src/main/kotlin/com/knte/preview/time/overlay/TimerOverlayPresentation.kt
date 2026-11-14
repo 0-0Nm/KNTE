@@ -31,6 +31,19 @@ data class TimerOverlaySnapshot(
     init { require(running.none { it.id.isBlank() }) }
 }
 
+/** Pure fail-closed lookup for actions that target the current running snapshot. */
+object TimerOverlaySelectionResolver {
+    fun resolve(phase: TimerOverlayPhase): TimerOverlayTarget? = when (phase) {
+        is TimerOverlayPhase.Running -> resolve(phase.snapshot, phase.selectedTargetId)
+        else -> null
+    }
+
+    fun resolve(snapshot: TimerOverlaySnapshot, selectedTargetId: String?): TimerOverlayTarget? {
+        val id = selectedTargetId?.takeIf { it.isNotBlank() } ?: return null
+        return snapshot.running.singleOrNull { it.id == id }
+    }
+}
+
 sealed interface TimerOverlayPhase {
     data object Unloaded : TimerOverlayPhase
     data class Idle(val snapshot: TimerOverlaySnapshot) : TimerOverlayPhase
