@@ -48,7 +48,7 @@ class IndependentControllerTest {
         fun snap()=raw().snapshot()
         fun fresh()=TimeSessionSource.open(dir).controller(clock)
     }
-    private fun f(name: String): F = F(Files.createTempDirectory(File(System.getProperty("review.synthetic")).toPath(),name+"-").toFile())
+    private fun f(name: String): F = F(Files.createTempDirectory(File(System.getProperty("review.synthetic") ?: System.getProperty("java.io.tmpdir")).toPath(),name+"-").toFile())
     private fun refusal(block: () -> Unit): String? = try { block(); null } catch(e: TimeControlException) { e.code }
     private fun absent(n: String="not-written")=TimePendingIntent(n,"start","e-absent","token-absent","t-absent","QA","2026-10-23","09:00",null,null,"baseline","2026-10-23T09:00")
     private fun clearFailureWritten(x:F): SessionHandle {

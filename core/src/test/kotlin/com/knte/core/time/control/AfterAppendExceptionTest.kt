@@ -11,7 +11,7 @@ import java.time.LocalDateTime
  * Does not pretend an actual filesystem/storage failure was induced. */
 class AfterAppendExceptionTest {
     @Test fun exceptionAfterRealAppendMustRetainIntentAndReportUnknownNotDefiniteFailure() {
-        val root=Files.createTempDirectory(File(System.getProperty("review.synthetic")).toPath(),"after-append-exception-").toFile()
+        val root=Files.createTempDirectory(File(System.getProperty("review.synthetic") ?: System.getProperty("java.io.tmpdir")).toPath(),"after-append-exception-").toFile()
         val dir=File(root,"store")
         val src=TimeSessionSource.openWithFaultInjection(dir) { throw IOException("INJECTED_READBACK_IO_AFTER_APPEND") }
         val c=src.controller(object:TimeClock { override fun now()=LocalDateTime.parse("2026-10-23T09:00") })
