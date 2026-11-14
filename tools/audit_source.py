@@ -3,6 +3,12 @@
 from pathlib import Path
 import hashlib,json,re,subprocess,sys
 root=Path(__file__).resolve().parents[1]
+APPROVED_PERMISSIONS={
+ 'android.permission.FOREGROUND_SERVICE',
+ 'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
+ 'android.permission.SYSTEM_ALERT_WINDOW',
+ 'android.permission.POST_NOTIFICATIONS',
+}
 res=subprocess.run(['git','ls-files','-z'],cwd=root,capture_output=True,check=True)
 paths=[Path(p) for p in res.stdout.decode().split('\0') if p]
 errors=[]; hashes={}
@@ -17,6 +23,8 @@ for path in paths:
  except UnicodeDecodeError:errors.append((str(path),'unexpected binary'));continue
  if re.search(r'github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',text):errors.append((str(path),'credential-like content'))
 manifest=(root/'app/src/main/AndroidManifest.xml').read_text()
-if '<uses-permission' in manifest:errors.append(('AndroidManifest.xml','preview requests permission outside approved first slice'))
-print(json.dumps({'trackedFiles':len(paths),'totalBytes':sum((root/p).stat().st_size for p in paths if (root/p).is_file()),'errors':errors,'note':'pattern gate supplements human scope review; not exhaustive secret detection'},ensure_ascii=False,indent=2))
+requested=set(re.findall(r'<uses-permission\s+android:name="([^"]+)"',manifest))
+for perm in sorted(requested-APPROVED_PERMISSIONS):errors.append(('AndroidManifest.xml','preview requests permission outside approved slice: '+perm))
+if requested!=APPROVED_PERMISSIONS:errors.append(('AndroidManifest.xml','manifest permission set differs from approved slice'))
+print(json.dumps({'trackedFiles':len(paths),'totalBytes':sum((root/p).stat().st_size for p in paths if (root/p).is_file()),'requestedPermissions':sorted(requested),'approvedPermissions':sorted(APPROVED_PERMISSIONS),'errors':errors,'note':'pattern gate supplements human scope review; not exhaustive secret detection'},ensure_ascii=False,indent=2))
 if errors:sys.exit(1)
