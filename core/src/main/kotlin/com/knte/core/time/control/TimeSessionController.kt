@@ -446,10 +446,22 @@ class TimeSessionController private constructor(
     /** Explicit decision for an intent reported as PROVEN not-written. DROP abandons it;
      *  RESUBMIT_CONFIRM_REQUIRED expects the app to run a fresh prepare+confirm (no automatic
      *  replay ever). Both are non-writing resolutions of an intent whose event is genuinely
-     *  absent from a strictly readable, pending-free ledger. Mismatched/uncertain intents can
-     *  never be resolved here (TIME_INTENT_UNKNOWN): manual review + process restart only. */
+     *  absent from a strictly readable, pending-free ledger AT DECISION TIME: the resolution
+     *  always re-reconciles from the real journal and ledger first, so a stale absence proof
+     *  (event committed meanwhile by another writer) never clears the intent — the event is
+     *  then judged on current evidence (proven-committed is cleared read-only, mismatch goes
+     *  manual) and the enum decision itself is refused (TIME_INTENT_UNKNOWN). Mismatched/
+     *  uncertain intents can never be resolved here: manual review + process restart only. */
     fun resolveRecoveredIntent(nonce: String, decision: RecoveredIntentDecision) = synchronized(lock) {
         require(decision != null) { "decision required" }
+        // Re-verify against the REAL journal and a strictly readable ledger before acting on
+        // any earlier classification: a previous "absent" proof is stale the moment another
+        // writer committed that event. Journal read failure, an unreadable store (pending
+        // marker) or any reclassification to manual blocks the resolution here; each intent
+        // is judged on its own current evidence, never one DROP for a whole stale batch.
+        if (journal != null) {
+            reconcileLocked()
+        }
         if (nonce in recoveredManual) {
             throw TimeControlException("TIME_INTENT_UNKNOWN",
                 "该意图与账本事件/token/字段不一致或来源不可信：只能人工核对账本与journal后重启进程，" +
@@ -641,6 +653,11 @@ class TimeSessionController private constructor(
     private fun doCommit(rec: OpRecord): ConfirmResult {
         refuseReview()
         ensureReconciledLocked()
+        // Post-reconcile gate: classification during ensureReconciled may have just revealed
+        // unresolved recovery intents (e.g. a journal attached after this handle was prepared).
+        // Re-check AFTER reconciliation completes and BEFORE any journal intent is saved or any
+        // ledger write starts, so late-attached unresolved intents block the business write.
+        refuseReview()
         val j = journal
         if (j != null) {
             j.save(TimePendingIntent(
