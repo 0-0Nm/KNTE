@@ -55,13 +55,17 @@ class AppTimeAuthority private constructor(
 
     suspend fun prepareStart(project: String): OpaqueHostHandle = run { initialize(); serial.withLock {
         ensureReady(); _state.value = AuthorityState(AuthorityPhase.Busy("准备开始"), _state.value.monitor)
-        try { withContext(io) { controller.prepareStart(project) }.also { return issue(it, "start") } }
-        catch (t: Throwable) { fail(t); throw t }
+        try {
+            val session = withContext(io) { controller.prepareStart(project) }
+            return issue(session, "start")
+        } catch (t: Throwable) { fail(t); throw t }
     } }
     suspend fun prepareStop(recordId: String): OpaqueHostHandle = run { initialize(); serial.withLock {
         ensureReady(); _state.value = AuthorityState(AuthorityPhase.Busy("准备停止"), _state.value.monitor)
-        try { withContext(io) { controller.prepareStop(recordId) }.also { return issue(it, "stop") } }
-        catch (t: Throwable) { fail(t); throw t }
+        try {
+            val session = withContext(io) { controller.prepareStop(recordId) }
+            return issue(session, "stop")
+        } catch (t: Throwable) { fail(t); throw t }
     } }
     suspend fun confirm(handle: OpaqueHostHandle): ConfirmResult = run { initialize(); serial.withLock {
         ensureReady(); val h = exact(handle); _state.value = AuthorityState(AuthorityPhase.Busy("写入并重读"), _state.value.monitor)
