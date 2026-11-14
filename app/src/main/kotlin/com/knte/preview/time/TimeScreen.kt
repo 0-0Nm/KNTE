@@ -52,9 +52,9 @@ fun TimeScreen(viewModel: TimeViewModel) {
                         Text(if (showWriteDetails) "收起校验详情" else "查看校验详情")
                     }
                     if (showWriteDetails) {
-                        Text("事件 id：${c.plan.eventId}", style = MaterialTheme.typography.bodySmall)
-                        Text("基线 SHA-256：${c.plan.baselineRevision}", style = MaterialTheme.typography.bodySmall)
-                        Text("追加后 SHA-256：${c.plan.afterRevision}", style = MaterialTheme.typography.bodySmall)
+                        Text("host handle：${c.handle.value}", style = MaterialTheme.typography.bodySmall)
+                        Text("目标 recordId：${c.targetId.ifBlank { "确认后由主机绑定" }}", style = MaterialTheme.typography.bodySmall)
+                        Text("计划由唯一 authority 保持；原始 ledger plan 不离开 controller。", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             },

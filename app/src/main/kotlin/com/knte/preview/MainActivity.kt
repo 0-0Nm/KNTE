@@ -28,8 +28,7 @@ import com.knte.preview.diary.DiaryViewModel
 import com.knte.preview.time.TimeViewModel
 import com.knte.preview.accounting.AccountingViewModel
 import com.knte.core.accounting.IsolatedAccountingLedger
-import com.knte.core.time.repository.IsolatedTimeRepository
-import com.knte.core.time.repository.TimeLedgerApi
+import com.knte.preview.time.host.AppTimeAuthority
 import java.io.File
 
 /** Separate app ID and private folder. Never opens the old app or any external Vault. */
@@ -63,14 +62,12 @@ class MainActivity : ComponentActivity() {
                 return DiaryViewModel({ isolatedStorage }, extras.createSavedStateHandle()) as T
             }
         }
-        val timeStorage by lazy {
-            TimeLedgerApi(IsolatedTimeRepository.open(File(filesDir.canonicalFile, "isolated-time-contract-v1")))
-        }
+        val timeAuthority = AppTimeAuthority.get(applicationContext)
         val timeFactory = object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
                 require(modelClass.isAssignableFrom(TimeViewModel::class.java))
                 @Suppress("UNCHECKED_CAST")
-                return TimeViewModel({ timeStorage }, extras.createSavedStateHandle()) as T
+                return TimeViewModel(timeAuthority, extras.createSavedStateHandle()) as T
             }
         }
         val accountingStorage by lazy {
