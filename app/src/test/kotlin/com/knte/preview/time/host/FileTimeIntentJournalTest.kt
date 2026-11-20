@@ -379,29 +379,34 @@ class FileTimeIntentJournalTest {
     }
 
     @Test
-    fun unknownWriteResultRetainsIntentThenRecoveryConfirmsReadOnly() = fixture { root ->
+    fun recoveryRetainsIntentWhileLedgerPendingThenConfirmsReadOnly() = fixture { root ->
         val store = storeDir(root)
         val dir = journalDir(root)
         val real = FileTimeIntentJournal(dir)
-        // readback fault: the commit lands but its proof fails -> TIME_WRITE_RESULT_UNKNOWN
-        val src = TimeSessionSource.openWithFaultInjection(store) { true }
-        val c = src.controller(FakeClock(LocalDateTime.parse("2026-10-23T09:00")))
-        c.setIntentJournal(real)
+        lateinit var saved: TimePendingIntent
+        val journal = RecordingJournal(real, onSave = { saved = it })
+        val c = TimeSessionSource.open(store).controller(FakeClock(LocalDateTime.parse("2026-10-23T09:00")))
+        c.setIntentJournal(journal)
         val h = c.prepareStart(project = "晨读")
-        rejectsCode("TIME_WRITE_RESULT_UNKNOWN") { c.confirm(h) }
-        // intent retained durably, never retried, further business refused
-        val retained = FileTimeIntentJournal(dir).loadAll()
-        assertEquals(1, retained.size)
-        assertEquals(h.nonce, retained.single().nonce)
-        rejectsCode("TIME_REVIEW_REQUIRED") { c.prepareStart(project = "其他") }
-        // the unknown commit left the repository pending marker: reads stay blocked until a HUMAN
-        // resolves the store (test performs the human step, mirroring the core controller tests)
+        c.confirm(h)
+        val revision = snapshot(store).revision
+        // Model the durable post-append, pre-proof state using this synthetic store.
+        // Fault injection during commit itself is covered in :core, where the hook is internal.
         val pending = File(store, "timetrack.jsonl.pending")
-        assertTrue(pending.exists())
-        assertTrue(pending.delete())
-        // restart: the event really landed, so recovery confirms it READ-ONLY and clears
+        val attempt = File(store, ".journal").listFiles()!!.single()
+        pending.writeText(attempt.name + "\n")
+        real.save(saved)
         val c2 = TimeSessionSource.open(store).controller(FakeClock(LocalDateTime.parse("2026-10-23T09:10")))
         c2.setIntentJournal(FileTimeIntentJournal(dir))
+        val gated = c2.recoverPendingIntents()
+        assertTrue(gated.manualReviewRequired)
+        assertTrue(gated.confirmed.isEmpty())
+        assertTrue(gated.notWrittenNonces.isEmpty())
+        assertEquals(listOf(saved), real.loadAll())
+        rejectsCode("TIME_REVIEW_REQUIRED") { c2.prepareStart(project = "其他") }
+        assertTrue(pending.exists())
+        // Test-only simulation of human resolution. Recovery must not append or retry.
+        assertTrue(pending.delete())
         val report = c2.recoverPendingIntents()
         assertEquals(1, report.confirmed.size)
         assertTrue(report.confirmed.single().replayed)
@@ -410,6 +415,7 @@ class FileTimeIntentJournalTest {
         assertFalse(report.manualReviewRequired)
         assertTrue(FileTimeIntentJournal(dir).loadAll().isEmpty())
         assertEquals(1, snapshot(store).events.size) // exactly one event, no double write
+        assertEquals(revision, snapshot(store).revision)
     }
 
     @Test
