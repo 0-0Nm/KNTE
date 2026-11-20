@@ -128,7 +128,7 @@ class TimeMonitorService : Service() {
                         is TimerOverlayIntent.Stop -> if (authority.state.value.phase is AuthorityPhase.Ready) {
                             // Stop acts only on the explicitly selected target: never infer.
                             val target = resolveSelectedForAction()
-                            if (target != null) owned = authority.prepareStop(target, owner)
+                            if (target == intent.targetId) owned = authority.prepareStop(intent.targetId, owner)
                         }
                         is TimerOverlayIntent.Confirm -> {
                             val mine = ownedHandleSnapshot()

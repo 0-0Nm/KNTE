@@ -47,7 +47,7 @@ class TimeViewModel(private val authority: AppTimeAuthority, private val handle:
         // local flow; records/review/error follow the authority so cross-surface changes
         // (monitor confirm/cancel, review transitions) no longer show stale data.
         _state.value = _state.value.copy(
-            records = v?.records.orEmpty(),
+            records = v?.records ?: _state.value.records,
             loaded = v != null || _state.value.loaded,
             reviewRequired = v?.reviewRequired == true,
             error = v?.readError,
@@ -67,13 +67,13 @@ class TimeViewModel(private val authority: AppTimeAuthority, private val handle:
             .onSuccess { h -> _state.value = _state.value.copy(busy=false, confirmation=confirmationFromAuthority("stop", h, fallbackProject=_state.value.records.firstOrNull { it.id == id }?.project ?: "")) }
             .onFailure { fail(it) }
     } }
-    fun confirmCommit() { val c = _state.value.confirmation ?: return; if (_state.value.busy) return; _state.value = _state.value.copy(busy=true); viewModelScope.launch { runCatching { authority.confirm(c.handle, owner) }.onSuccess { result -> clearDraft(); _state.value = _state.value.copy(busy=false,confirmation=null,notice="已确认 ${result.op}；历史回执 runningAfter=${result.runningAfter}，当前运行视图已独立重读") }.onFailure { t -> fail(t, review=false); _state.value = _state.value.copy(confirmation=c) } } }
+    fun confirmCommit() { val c = _state.value.confirmation ?: return; if (_state.value.busy || _state.value.reviewRequired) return; _state.value = _state.value.copy(busy=true); viewModelScope.launch { runCatching { authority.confirm(c.handle, owner) }.onSuccess { result -> clearDraft(); _state.value = _state.value.copy(busy=false,confirmation=null,draft=null,notice="已确认 ${result.op}；历史回执 runningAfter=${result.runningAfter}，当前运行视图已独立重读") }.onFailure { t -> fail(t, review=false); _state.value = _state.value.copy(confirmation=c) } } }
 
     /** Dialog cancel/dismiss actually cancels the issued prepare through the authority
      *  (owner-scoped): no orphan host handle, no silent TIME_CONTROL_UNRESOLVED_OP. */
     fun dismissConfirmation() {
         val c = _state.value.confirmation ?: return
-        if (_state.value.busy) return
+        if (_state.value.busy || _state.value.reviewRequired) return
         _state.value = _state.value.copy(confirmation=null, busy=true)
         viewModelScope.launch {
             runCatching { authority.cancel(c.handle, owner) }
@@ -82,14 +82,20 @@ class TimeViewModel(private val authority: AppTimeAuthority, private val handle:
         }
     }
 
-    /** Discard clears the draft AND cancels any pending unconfirmed prepare of this page. */
+    /** Preserve the draft and bound handle until exact cancellation has succeeded. */
     fun discard() {
-        if (_state.value.busy) return
+        if (_state.value.busy || _state.value.reviewRequired) return
         val pending = _state.value.confirmation
-        if (_state.value.draft?.dirty != true && pending == null) return
-        clearDraft()
-        _state.value = _state.value.copy(draft=null, confirmation=null, notice="已放弃当前草稿；未写入")
-        if (pending != null) viewModelScope.launch { runCatching { authority.cancel(pending.handle, owner) }.onFailure { fail(it) } }
+        if (_state.value.draft == null && pending == null) return
+        fun finish() {
+            clearDraft()
+            _state.value = _state.value.copy(busy=false, draft=null, confirmation=null, notice="已放弃当前草稿；未写入")
+        }
+        if (pending == null) { finish(); return }
+        _state.value = _state.value.copy(busy=true)
+        viewModelScope.launch {
+            runCatching { authority.cancel(pending.handle, owner) }.onSuccess { finish() }.onFailure { fail(it) }
+        }
     }
 
     private fun confirmationFromAuthority(op: String, h: OpaqueHostHandle, fallbackProject: String): TimeConfirmation {
