@@ -52,12 +52,31 @@ sealed interface TimerOverlayPhase {
         val snapshot: TimerOverlaySnapshot,
         val selectedTargetId: String? = null,
     ) : TimerOverlayPhase
-    data class PreparingStart(val projectText: String, val handle: OpaqueHandle) : TimerOverlayPhase
-    data class PreparingStop(val target: TimerOverlayTarget, val handle: OpaqueHandle) : TimerOverlayPhase
+    data class PreparingStart(
+        val projectText: String,
+        val handle: OpaqueHandle,
+        val eventTimes: TimerOverlayEventTimes? = null,
+    ) : TimerOverlayPhase
+    data class PreparingStop(
+        val target: TimerOverlayTarget,
+        val handle: OpaqueHandle,
+        val eventTimes: TimerOverlayEventTimes? = null,
+    ) : TimerOverlayPhase
     data class Busy(val operationText: String) : TimerOverlayPhase
     data class PendingReview(val message: String, val lastGood: TimerOverlaySnapshot? = null) : TimerOverlayPhase
     data class Failed(val message: String, val lastGood: TimerOverlaySnapshot? = null) : TimerOverlayPhase
     data class Confirmed(val operationText: String, val targetId: String? = null) : TimerOverlayPhase
+}
+
+/** Display-only values from the SAME immutable prepared handle, never the current clock.
+ * Null means unavailable; the panel explicitly says so instead of inventing a time.
+ * The host includes the date (including a cross-day end date) in each supplied value.
+ */
+data class TimerOverlayEventTimes(val startText: String? = null, val endText: String? = null) {
+    init {
+        require(startText == null || startText.isNotBlank())
+        require(endText == null || endText.isNotBlank())
+    }
 }
 
 enum class TimerOverlayMonitor { Running, Stopped }
@@ -70,7 +89,7 @@ value class OpaqueHandle(val value: String) {
 
 sealed interface TimerOverlayIntent {
     data class Start(val projectText: String) : TimerOverlayIntent {
-        init { require(projectText.isNotBlank()) }
+        init { require(TimerOverlayText.projectInputError(projectText) == null) { "invalid project input" } }
     }
     data class Stop(val targetId: String) : TimerOverlayIntent {
         init { require(targetId.isNotBlank()) }
@@ -107,7 +126,40 @@ object TimerOverlayPresentationMapper {
 object TimerOverlayText {
     const val maxProjectLength = 96
 
-    fun projectInput(raw: String): String = raw.trim().take(maxProjectLength)
+    /** Source-compatible adapter: valid input is returned VERBATIM; invalid input is refused.
+     * No trimming, normalization or UTF-16 substring truncation is allowed at this boundary.
+     */
+    fun projectInput(raw: String): String = if (projectInputError(raw) == null) raw else ""
+
+    /** Limit counts Unicode code points, not graphemes or UTF-16 code units. */
+    fun projectInputError(raw: String): String? {
+        var index = 0
+        var count = 0
+        while (index < raw.length) {
+            val ch = raw[index++]
+            if (Character.isHighSurrogate(ch)) {
+                if (index == raw.length || !Character.isLowSurrogate(raw[index])) return "项目包含不完整的 Unicode 字符"
+                index++
+            } else if (Character.isLowSurrogate(ch)) return "项目包含不完整的 Unicode 字符"
+            count++
+        }
+        return when {
+            raw.isBlank() -> "请输入项目名称"
+            count > maxProjectLength -> "项目最多 $maxProjectLength 个 Unicode 字符（当前 $count）"
+            else -> null
+        }
+    }
+
+    fun projectEditable(phase: TimerOverlayPhase): Boolean = phase is TimerOverlayPhase.Idle
+
+    fun preparingDetails(phase: TimerOverlayPhase): String = when (phase) {
+        is TimerOverlayPhase.PreparingStart ->
+            "项目：${phase.projectText}\n来源：主机待核对\n计划开始：${phase.eventTimes?.startText ?: "主机未提供"}"
+        is TimerOverlayPhase.PreparingStop -> targetDetails(phase.target) +
+            "\n计划开始：${phase.eventTimes?.startText ?: "主机未提供"}" +
+            "\n计划停止：${phase.eventTimes?.endText ?: "主机未提供"}"
+        else -> ""
+    }
 
     fun phaseLabel(phase: TimerOverlayPhase): String = when (phase) {
         TimerOverlayPhase.Unloaded -> "尚未加载"

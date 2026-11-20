@@ -26,7 +26,7 @@ class TimerOverlayPanel(
     private val status = label("尚未加载", 14f)
     private val clock = label("", 28f)
     private val project = EditText(context).apply {
-        hint = "项目（最多96字）"
+        hint = "项目（最多96个 Unicode 字符）"
         maxLines = 1
         setSingleLine(true)
         contentDescription = "项目名称"
@@ -41,7 +41,16 @@ class TimerOverlayPanel(
     private val hide = button("隐藏浮窗")
     private val dragHandle = label("拖动", 12f)
     private var rendered: TimerOverlayPresentation = TimerOverlayPresentation()
-    private var dragMoved = false
+    private var windowCallbacks: TimerOverlayWindowCallbacks? = null
+    private val dragTouchListener = DragTouchListener()
+
+    /** Optional host integration, not a WindowManager implementation. Existing construction is unchanged. */
+    fun setWindowCallbacks(callbacks: TimerOverlayWindowCallbacks?) {
+        dragTouchListener.cancel()
+        windowCallbacks = callbacks
+        dragHandle.text = if (callbacks == null) "拖动（主机未接入）" else "拖动"
+        callbacks?.onProjectFocusChanged(project.hasFocus() && project.isEnabled)
+    }
 
     init {
         orientation = VERTICAL
@@ -70,15 +79,22 @@ class TimerOverlayPanel(
         cancel.setOnClickListener { currentHandle()?.let { emit(TimerOverlayIntent.Cancel(it)) } }
         expand.setOnClickListener { emit(TimerOverlayIntent.ToggleExpanded) }
         hide.setOnClickListener { emit(TimerOverlayIntent.Hide) }
-        dragHandle.setOnTouchListener(DragTouchListener())
+        dragHandle.setOnTouchListener(dragTouchListener)
         post { installDragTouchDelegate() }
         project.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                if (rendered.phase is TimerOverlayPhase.Idle) primary.isEnabled = TimerOverlayText.projectInput(s?.toString().orEmpty()).isNotBlank()
+                if (TimerOverlayText.projectEditable(rendered.phase)) {
+                    project.error = TimerOverlayText.projectInputError(s?.toString().orEmpty())
+                    primary.isEnabled = project.error == null
+                }
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
+        project.setOnFocusChangeListener { _, focused ->
+            windowCallbacks?.onProjectFocusChanged(focused && project.isEnabled)
+        }
+        setWindowCallbacks(null)
         importantA11y()
         render(rendered)
     }
@@ -88,6 +104,15 @@ class TimerOverlayPanel(
         status.text = TimerOverlayText.phaseLabel(next.phase)
         clock.text = next.clockText?.let { "估算：$it" } ?: "分钟事实由主机提供"
         project.visibility = if (next.phase is TimerOverlayPhase.PreparingStart || next.phase is TimerOverlayPhase.Idle) VISIBLE else GONE
+        val editable = TimerOverlayText.projectEditable(next.phase)
+        project.isEnabled = editable
+        project.isFocusable = editable
+        project.isFocusableInTouchMode = editable
+        if (!editable) project.clearFocus()
+        if (next.phase is TimerOverlayPhase.PreparingStart && project.text.toString() != next.phase.projectText) {
+            project.setText(next.phase.projectText)
+        }
+        project.error = if (editable && project.text.isNotEmpty()) TimerOverlayText.projectInputError(project.text.toString()) else null
         targetList.removeAllViews()
         details.text = ""
         val snapshot = snapshotOf(next.phase)
@@ -101,8 +126,7 @@ class TimerOverlayPanel(
             targetList.addView(item, lp(-1, 52))
         }
         when (val phase = next.phase) {
-            is TimerOverlayPhase.PreparingStart -> details.text = "项目：${phase.projectText}\n来源：主机待核对"
-            is TimerOverlayPhase.PreparingStop -> details.text = TimerOverlayText.targetDetails(phase.target)
+            is TimerOverlayPhase.PreparingStart, is TimerOverlayPhase.PreparingStop -> details.text = TimerOverlayText.preparingDetails(phase)
             is TimerOverlayPhase.PendingReview -> details.text = phase.message
             is TimerOverlayPhase.Failed -> details.text = phase.message + (phase.lastGood?.let { "\n已保留上次可用投影" } ?: "")
             is TimerOverlayPhase.Confirmed -> details.text = phase.operationText
@@ -123,7 +147,7 @@ class TimerOverlayPanel(
         val detailVisible = next.expanded || confirm.visibility == VISIBLE || next.phase is TimerOverlayPhase.Failed || next.phase is TimerOverlayPhase.PendingReview
         targetList.visibility = if (next.expanded) VISIBLE else GONE
         details.visibility = if (detailVisible) VISIBLE else GONE
-        if (next.requestProjectFocus) project.requestFocus()
+        if (next.requestProjectFocus && editable) project.requestFocus()
     }
 
     private fun onPrimary() {
@@ -169,13 +193,20 @@ class TimerOverlayPanel(
     }
 
     private inner class DragTouchListener : OnTouchListener {
-        private var downX = 0f; private var downY = 0f; private var originX = 0f; private var originY = 0f
-        private val slop = ViewConfiguration.get(context).scaledTouchSlop
-        override fun onTouch(v: View, e: MotionEvent): Boolean = when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> { downX = e.rawX; downY = e.rawY; originX = translationX; originY = translationY; dragMoved = false; true }
-            MotionEvent.ACTION_MOVE -> { val dx = e.rawX - downX; val dy = e.rawY - downY; if (!dragMoved && dx * dx + dy * dy > slop * slop) dragMoved = true; if (dragMoved) { translationX = originX + dx; translationY = originY + dy }; true }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { val consumed = dragMoved; dragMoved = false; consumed }
-            else -> false
+        private val gesture = TimerOverlayDragGesture(ViewConfiguration.get(context).scaledTouchSlop.toFloat())
+        fun cancel() { gesture.end() }
+        override fun onTouch(v: View, e: MotionEvent): Boolean {
+            if (windowCallbacks == null) return false
+            return when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { gesture.begin(e.rawX, e.rawY); true }
+                MotionEvent.ACTION_MOVE -> {
+                    gesture.move(e.rawX, e.rawY)?.let { windowCallbacks?.onDragBy(it.x, it.y) }
+                    true
+                }
+                MotionEvent.ACTION_UP -> { if (!gesture.end()) v.performClick(); true }
+                MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> { gesture.end(); true }
+                else -> false
+            }
         }
     }
 

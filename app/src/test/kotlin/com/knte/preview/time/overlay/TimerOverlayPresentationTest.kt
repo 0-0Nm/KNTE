@@ -14,8 +14,8 @@ class TimerOverlayPresentationTest {
     }
 
     @Test fun startStopIntentsCarryOnlyBoundedTextIdOrOpaqueHandle() {
-        assertEquals("项目", TimerOverlayText.projectInput("  项目  "))
-        assertEquals(96, TimerOverlayText.projectInput("x".repeat(200)).length)
+        assertEquals("  项目  ", TimerOverlayText.projectInput("  项目  "))
+        assertEquals("", TimerOverlayText.projectInput("x".repeat(200)))
         val handle = OpaqueHandle("h-1")
         assertEquals(handle, (TimerOverlayIntent.Confirm(handle) as TimerOverlayIntent.Confirm).handle)
         assertEquals("r-a", (TimerOverlayIntent.Stop("r-a") as TimerOverlayIntent.Stop).targetId)
