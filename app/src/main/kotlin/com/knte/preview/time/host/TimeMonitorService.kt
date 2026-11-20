@@ -176,9 +176,9 @@ class TimeMonitorService : Service() {
                 val handle = ownedHandleSnapshot()?.takeIf { authority.currentOpaqueHandle() == it }?.toPanelHandle()
                 when {
                     handle == null -> TimerOverlayPhase.Busy("请在发起操作的界面核对")
-                    p.op == "start" -> TimerOverlayPhase.PreparingStart(p.handle.project, handle)
+                    p.op == "start" -> TimerOverlayPhase.PreparingStart(p.handle.project, handle, TimerOverlayEventTimes("${p.handle.date} ${p.handle.start}"))
                     else -> TimerOverlayPhase.PreparingStop(
-                        TimerOverlayTarget(p.handle.targetId, p.handle.project, "${p.handle.date} ${p.handle.start}", "本地时记"), handle
+                        TimerOverlayTarget(p.handle.targetId, p.handle.project, "${p.handle.date} ${p.handle.start}", "本地时记"), handle, TimerOverlayEventTimes("${p.handle.date} ${p.handle.start}", p.handle.end?.let { "${p.handle.endDate ?: p.handle.date} $it" })
                     )
                 }
             }
@@ -189,9 +189,7 @@ class TimeMonitorService : Service() {
                     TimerOverlayTarget(it.id, it.project, "${it.date} ${it.start}", "本地时记")
                 }
                 val snapshot = TimerOverlaySnapshot(running)
-                // Sole-running display fallback is presentation only; actions still require
-                // resolveSelectedForAction() to match an explicit selection.
-                val target: String? = TimerOverlaySelectionResolver.resolve(snapshot, selected)?.id ?: running.singleOrNull()?.id
+                val target: String? = TimerOverlaySelectionResolver.resolve(snapshot, selected)?.id
                 when {
                     p.view.reviewRequired || p.view.readError != null -> TimerOverlayPhase.PendingReview("待人工核对")
                     running.isEmpty() -> TimerOverlayPhase.Idle(snapshot)
