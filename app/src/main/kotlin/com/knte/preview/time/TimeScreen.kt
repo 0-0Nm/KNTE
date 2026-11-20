@@ -48,6 +48,10 @@ fun TimeScreen(viewModel: TimeViewModel) {
                             "项目：${c.project}\n开始时间：${c.date} ${c.start}\n结束时间：${c.endDate ?: c.date} ${c.end}"
                         }
                     )
+                    Text(
+                        "以上时间来自权威控制器签发的本核 prepare 会话；取消不写入任何事件。",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                     Text("取消不会写入。记录状态与时长均由事件投影实时派生，不写入状态列。")
                     TextButton(onClick = { showWriteDetails = !showWriteDetails }) {
                         Text(if (showWriteDetails) "收起校验详情" else "查看校验详情")

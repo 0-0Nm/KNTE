@@ -8,6 +8,7 @@ import android.view.WindowManager
 import com.knte.preview.time.overlay.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -15,20 +16,24 @@ import kotlinx.coroutines.sync.withLock
 class TimeMonitorService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val authority by lazy { AppTimeAuthority.get(applicationContext) }
+    private val owner = "monitor-${java.util.UUID.randomUUID()}"
     private val operations = Mutex()
-    private var owned: OpaqueHostHandle? = null
-    private var panel: TimerOverlayPanel? = null
     private val window by lazy { getSystemService(WindowManager::class.java) }
+    private var panel: TimerOverlayPanel? = null
+    private var owned: OpaqueHostHandle? = null
+    private var started = false
+
+    /** Explicit selection: null == no explicit choice yet. A stale selection that no longer
+     *  matches the live running snapshot is invalidated instead of implicitly falling back
+     *  to another running record (regression fix: removing A must never let stop act on B). */
     private var selected: String? = null
     private var expanded = true
-    private var started = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_MONITOR, ACTION_SHOW -> {
                 if (!monitorAccess(this).allowed) {
-                    _status.value = MonitorStatus.Failed
-                    stopSelf()
+                    failNow()
                     return START_NOT_STICKY
                 }
                 if (!started) {
@@ -39,16 +44,20 @@ class TimeMonitorService : Service() {
                         startForeground(NOTIFICATION_ID, notification())
                         started = true
                     } catch (_: RuntimeException) {
-                        _status.value = MonitorStatus.Failed
-                        stopSelf()
+                        failNow()
                         return START_NOT_STICKY
+                    }
+                    scope.launch {
+                        authority.openOwner(owner)
+                        runCatching { authority.initialize() }
+                        runCatching { authority.reload() }
                     }
                     scope.launch { authority.state.collect { render() } }
                     scope.launch {
                         while (isActive && monitorAccess(this@TimeMonitorService).allowed) delay(1000)
                         operations.withLock {
                             detach()
-                            cancelOwn()
+                            closeOwnerScoped()
                             _status.value = MonitorStatus.Failed
                             stopSelf()
                         }
@@ -65,6 +74,11 @@ class TimeMonitorService : Service() {
         return START_NOT_STICKY
     }
 
+    private fun failNow() {
+        _status.value = MonitorStatus.Failed
+        stopSelf()
+    }
+
     private fun show() {
         if (panel == null) {
             val next = TimerOverlayPanel(this, ::handle)
@@ -75,8 +89,7 @@ class TimeMonitorService : Service() {
                 ))
                 panel = next
             } catch (_: RuntimeException) {
-                _status.value = MonitorStatus.Failed
-                stopSelf()
+                failNow()
                 return
             }
         }
@@ -90,18 +103,16 @@ class TimeMonitorService : Service() {
         selected = null
     }
 
-    private suspend fun cancelOwn() {
-        val handle = owned ?: return
-        owned = null
-        if (authority.currentOpaqueHandle() == handle) {
-            try { authority.cancel(handle) } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { /* No retries or implicit acknowledgement. */ }
-        }
+    private suspend fun closeOwnerScoped() {
+        try { authority.closeOwner(owner, "monitor-stopped") }
+        catch (e: CancellationException) { throw e }
+        catch (_: Exception) { /* issued handle stays discoverable; no retry/ack/clear */ }
     }
 
+    /** Display-only: the monitor owner stays open and any active prepare of this surface is
+     *  preserved — hiding the window never cancels or hides business state. */
     private suspend fun hide() {
         detach()
-        cancelOwn()
         _status.value = if (started) MonitorStatus.Hidden else MonitorStatus.Off
     }
 
@@ -111,14 +122,22 @@ class TimeMonitorService : Service() {
                 if (panel == null || !monitorAccess(this@TimeMonitorService).allowed) return@withLock
                 try {
                     when (intent) {
-                        is TimerOverlayIntent.Start -> if (authority.state.value.phase is AuthorityPhase.Ready) owned = authority.prepareStart(intent.projectText)
-                        is TimerOverlayIntent.Stop -> if (authority.state.value.phase is AuthorityPhase.Ready) owned = authority.prepareStop(intent.targetId)
-                        is TimerOverlayIntent.Confirm -> if (owned?.value == intent.handle.value && authority.currentOpaqueHandle() == owned) {
-                            val handle = checkNotNull(owned)
-                            owned = null
-                            authority.confirm(handle)
+                        is TimerOverlayIntent.Start -> if (authority.state.value.phase is AuthorityPhase.Ready) {
+                            owned = authority.prepareStart(intent.projectText, owner)
                         }
-                        is TimerOverlayIntent.Cancel -> if (owned?.value == intent.handle.value) cancelOwn()
+                        is TimerOverlayIntent.Stop -> if (authority.state.value.phase is AuthorityPhase.Ready) {
+                            // Stop acts only on the explicitly selected target: never infer.
+                            val target = resolveSelectedForAction()
+                            if (target != null) owned = authority.prepareStop(target, owner)
+                        }
+                        is TimerOverlayIntent.Confirm -> {
+                            val mine = ownedHandleSnapshot()
+                            if (mine?.value == intent.handle.value && authority.ownedHandle(owner) == mine) {
+                                authority.confirm(mine, owner)
+                                owned = null
+                            }
+                        }
+                        is TimerOverlayIntent.Cancel -> if (ownedHandleSnapshot()?.value == intent.handle.value) cancelOwn()
                         TimerOverlayIntent.Hide -> hide()
                         TimerOverlayIntent.ToggleExpanded -> expanded = !expanded
                         is TimerOverlayIntent.SelectTarget -> selected = intent.targetId
@@ -130,13 +149,31 @@ class TimeMonitorService : Service() {
         }
     }
 
+    private fun ownedHandleSnapshot(): OpaqueHostHandle? = authority.ownedHandle(owner)
+
+    private suspend fun cancelOwn() {
+        val handle = owned ?: return
+        owned = null
+        if (authority.ownedHandle(owner) == handle) {
+            try { authority.cancel(handle, owner) } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { /* No retries or implicit acknowledgement. */ }
+        }
+    }
+
+    /** Explicit-selection policy: an expired selection is dropped; without an explicit
+     *  selection there is NO action fallback — the panel shows "请选择目标". */
+    private fun resolveSelectedForAction(): String? {
+        val v = authority.currentView() ?: return null
+        return MonitorSelectionPolicy.explicitActionTarget(selected, v.records.filter { it.running() }.map { it.id })
+    }
+
     private fun render() {
         val targetPanel = panel ?: return
         val phase = when (val p = authority.state.value.phase) {
             AuthorityPhase.Starting -> TimerOverlayPhase.Unloaded
             is AuthorityPhase.Busy -> TimerOverlayPhase.Busy(p.message)
             is AuthorityPhase.Preparing -> {
-                val handle = owned?.takeIf { authority.currentOpaqueHandle() == it }?.toPanelHandle()
+                val handle = ownedHandleSnapshot()?.takeIf { authority.currentOpaqueHandle() == it }?.toPanelHandle()
                 when {
                     handle == null -> TimerOverlayPhase.Busy("请在发起操作的界面核对")
                     p.op == "start" -> TimerOverlayPhase.PreparingStart(p.handle.project, handle)
@@ -152,7 +189,9 @@ class TimeMonitorService : Service() {
                     TimerOverlayTarget(it.id, it.project, "${it.date} ${it.start}", "本地时记")
                 }
                 val snapshot = TimerOverlaySnapshot(running)
-                val target = TimerOverlaySelectionResolver.resolve(snapshot, selected)?.id ?: running.singleOrNull()?.id
+                // Sole-running display fallback is presentation only; actions still require
+                // resolveSelectedForAction() to match an explicit selection.
+                val target: String? = TimerOverlaySelectionResolver.resolve(snapshot, selected)?.id ?: running.singleOrNull()?.id
                 when {
                     p.view.reviewRequired || p.view.readError != null -> TimerOverlayPhase.PendingReview("待人工核对")
                     running.isEmpty() -> TimerOverlayPhase.Idle(snapshot)
@@ -175,10 +214,12 @@ class TimeMonitorService : Service() {
 
     override fun onDestroy() {
         detach()
+        authority.closeOwnerDetached(owner, "monitor-destroyed")
         if (_status.value != MonitorStatus.Failed) _status.value = MonitorStatus.Off
         scope.cancel()
         super.onDestroy()
     }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
@@ -189,11 +230,19 @@ class TimeMonitorService : Service() {
         const val ACTION_HIDE = "com.knte.preview.timer.HIDE"
         const val ACTION_STOP_MONITOR = "com.knte.preview.timer.STOP_MONITOR"
         private val _status = MutableStateFlow(MonitorStatus.Off)
-        internal val status = _status.asStateFlow()
+        internal val status: StateFlow<MonitorStatus> = _status.asStateFlow()
     }
 }
 
 internal enum class MonitorStatus(val label: String, val active: Boolean = false, val visible: Boolean = false) {
     Off("未开启"), Visible("浮窗已显示", true, true), Hidden("运行中，浮窗已隐藏", true),
     Failed("未开启：请检查悬浮窗和通知设置")
+}
+
+/** Pure, testable action-target policy. Display may show the sole running record, but a
+ *  stop action requires an EXPLICIT selection that still matches the live snapshot:
+ *  no implicit fallback (removing A must never silently aim stop at B). */
+internal object MonitorSelectionPolicy {
+    fun explicitActionTarget(selected: String?, runningIds: List<String>): String? =
+        selected?.takeIf { it.isNotBlank() && runningIds.contains(it) }
 }
