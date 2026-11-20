@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.knte.core.time.projection.TimeRecord
+import com.knte.preview.time.host.TimeMonitorControls
 
 @Composable
 fun TimeScreen(viewModel: TimeViewModel) {
@@ -71,6 +72,9 @@ fun TimeScreen(viewModel: TimeViewModel) {
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("时间 · 隔离追加验证", style = MaterialTheme.typography.titleLarge)
             Text(TIME_STORE_LABEL, style = MaterialTheme.typography.bodySmall)
+            if (state.draft == null && state.confirmation == null) {
+                TimeMonitorControls(canStart = state.loaded && !state.busy && !state.reviewRequired && state.error == null)
+            }
             state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             if (state.reviewRequired) Text("待人工核对：该状态下禁止再次追加，不自动重试、不自动清理 pending。")
