@@ -243,7 +243,8 @@ class FileTimeIntentJournal private constructor(
             if (end == null || end.isBlank() || end.length > MAX_FIELD_CHARS) {
                 fail("TIME_JOURNAL_FIELD_INVALID", "stop意图end缺失/越界")
             }
-            if (i.endDate != null && (i.endDate.isBlank() || i.endDate.length > MAX_FIELD_CHARS)) {
+            val endDate = i.endDate
+            if (endDate != null && (endDate.isBlank() || endDate.length > MAX_FIELD_CHARS)) {
                 fail("TIME_JOURNAL_FIELD_INVALID", "stop意图endDate越界")
             }
         }
