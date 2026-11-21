@@ -47,6 +47,7 @@ data class AuthorityState(
     val phase: AuthorityPhase = AuthorityPhase.Starting,
     val monitor: Boolean = false,
     val owners: Map<String, AuthorityOwnerState> = emptyMap(),
+    val latestView: TimeControlView? = null,
 )
 
 /** Context-free authority reducer over a real [TimeSessionController] and a real
@@ -124,6 +125,7 @@ class TimeAuthorityCore private constructor(
 
     suspend fun confirm(handle: OpaqueHostHandle, owner: String): ConfirmResult = run { initialize(); serial.withLock {
         ensureReady(); val h = exact(handle, owner)
+        rejectUncertain(owner)
         withContext(NonCancellable) {
         synchronized(ownersLock) { checkNotNull(owners[owner]).confirmAttempted = true }
         setPhase(AuthorityPhase.Busy("写入并重读"))
@@ -135,9 +137,13 @@ class TimeAuthorityCore private constructor(
             withContext(io) { publish(controller.reload()) }
             result
         } catch (t: Throwable) {
-            // The write may or may not have landed before failing. The handle stays issued and
-            // the pending intent stays on disk: no auto retry, no auto acknowledge, no clearing.
-            fail(t)
+            // Only this controller refusal explicitly proves no append was attempted.
+            if (t is TimeControlException && t.code == "TIME_BASELINE_CHANGED") {
+                synchronized(ownersLock) { owners[owner]?.confirmAttempted = false }
+                withContext(io) { publish(controller.viewSnapshot()) }
+            } else {
+                withContext(io) { publish(controller.viewSnapshot()) }
+            }
             throw t
         }
         }
@@ -145,6 +151,7 @@ class TimeAuthorityCore private constructor(
 
     suspend fun cancel(handle: OpaqueHostHandle, owner: String) = run { initialize(); serial.withLock {
         val h = exact(handle, owner)
+        rejectUncertain(owner)
         withContext(io) { controller.cancel(h) }
         issued.remove(handle.value)
         synchronized(ownersLock) { owners[owner]?.takeIf { it.handle?.value == handle.value }?.clearHandle() }
@@ -250,7 +257,18 @@ class TimeAuthorityCore private constructor(
         return session
     }
 
+    private fun rejectUncertain(owner: String) {
+        if (hasUncertain() || synchronized(ownersLock) { owners[owner]?.confirmAttempted == true }) {
+            throw TimeControlException("TIME_REVIEW_REQUIRED", "提交结果待核，不可重新确认或取消")
+        }
+    }
+
+    private fun hasUncertain(): Boolean = synchronized(ownersLock) {
+        owners.values.any { it.handle != null && it.confirmAttempted }
+    }
+
     private fun ensureReady() {
+        if (hasUncertain()) throw TimeControlException("TIME_REVIEW_REQUIRED", "提交结果待核")
         check(initialized) { "time authority initialization not complete" }
         check(controller.hasIntentJournal) { "persistent intent journal not attached" }
     }
@@ -261,7 +279,7 @@ class TimeAuthorityCore private constructor(
     private fun publish(view: TimeControlView) {
         val held = synchronized(ownersLock) { owners.values.firstOrNull { !it.closed && it.handle != null } }
         val phase = when {
-            view.reviewRequired || view.readError != null ->
+            hasUncertain() || view.reviewRequired || view.readError != null ->
                 AuthorityPhase.Review(view, view.readError ?: "待人工核对")
             held != null -> {
                 val session = checkNotNull(issued[held.handle!!.value])
@@ -269,7 +287,7 @@ class TimeAuthorityCore private constructor(
             }
             else -> AuthorityPhase.Ready(view)
         }
-        setPhase(phase)
+        setPhase(phase, view)
     }
 
     private fun fail(t: Throwable) {
@@ -277,8 +295,8 @@ class TimeAuthorityCore private constructor(
         setPhase(AuthorityPhase.Failed(view, t.message ?: t.javaClass.simpleName))
     }
 
-    private fun setPhase(phase: AuthorityPhase) {
-        _state.update { it.copy(phase = phase, owners = ownerSnapshot()) }
+    private fun setPhase(phase: AuthorityPhase, view: TimeControlView? = null) {
+        _state.update { it.copy(phase = phase, owners = ownerSnapshot(), latestView = view ?: it.latestView) }
     }
 
     private fun ownerSnapshot(): Map<String, AuthorityOwnerState> = synchronized(ownersLock) {
@@ -287,9 +305,7 @@ class TimeAuthorityCore private constructor(
 
     // ---- read-only views -----------------------------------------------------
 
-    fun currentView(): TimeControlView? = when (val p = _state.value.phase) {
-        is AuthorityPhase.Ready -> p.view; is AuthorityPhase.Review -> p.view; is AuthorityPhase.Failed -> p.view; else -> null
-    }
+    fun currentView(): TimeControlView? = _state.value.latestView
     fun currentHandle(value: String): OpaqueHostHandle? = value.takeIf { issued.containsKey(it) }?.let(::OpaqueHostHandle)
 
     /** Display-bound session lookup for an issued handle (real prepare timestamps come from

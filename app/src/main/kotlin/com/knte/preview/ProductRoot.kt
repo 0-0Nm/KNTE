@@ -89,7 +89,7 @@ fun ProductRoot(notes: NoteViewModel, diary: DiaryViewModel, time: TimeViewModel
             ContentOwner.PREVIEW_TOOL -> { notes.cancel();continuation() }
             ContentOwner.MODEL_CONFIG -> { modelConfig?.cancel();if(modelConfig == null || modelConfig.canLeave())continuation() }
             ContentOwner.DIARY -> { diary.discard();continuation() }
-            ContentOwner.TIME -> { time.discard();continuation() }
+            ContentOwner.TIME -> time.discard(continuation)
             ContentOwner.ACCOUNTING -> accounting.discard { continuation() }
             ContentOwner.HABIT -> habit.discard { continuation() }
             ContentOwner.REFERENCE -> reference.discard { continuation() }

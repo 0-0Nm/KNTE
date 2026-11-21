@@ -35,7 +35,7 @@ fun TimeScreen(viewModel: TimeViewModel) {
         confirmButton = { TextButton(onClick = { discard = false; viewModel.discard() }) { Text("放弃草稿") } },
         dismissButton = { TextButton(onClick = { discard = false }) { Text("继续") } })
 
-    state.confirmation?.let { c ->
+    state.confirmation?.takeUnless { state.reviewRequired }?.let { c ->
         AlertDialog(
             onDismissRequest = viewModel::dismissConfirmation,
             title = { Text(if (c.op == "start") "核对后追加 start" else "核对后追加 stop") },
@@ -77,10 +77,11 @@ fun TimeScreen(viewModel: TimeViewModel) {
             Text("时间 · 隔离追加验证", style = MaterialTheme.typography.titleLarge)
             Text(TIME_STORE_LABEL, style = MaterialTheme.typography.bodySmall)
             if (state.draft == null && state.confirmation == null) {
-                TimeMonitorControls(canStart = state.loaded && !state.busy && !state.reviewRequired && state.error == null)
+                TimeMonitorControls(canStart = state.loaded && !state.busy && !state.remoteOperation && !state.reviewRequired && state.error == null)
             }
             state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            if (state.remoteOperation && !state.reviewRequired) Text("另一入口正在准备或提交，请在原入口处理。")
             if (state.reviewRequired) Text("待人工核对：该状态下禁止再次追加，不自动重试、不自动清理 pending。")
 
             val d = state.draft
@@ -90,7 +91,7 @@ fun TimeScreen(viewModel: TimeViewModel) {
                     value = d.project,
                     onValueChange = viewModel::projectChanged,
                     singleLine = true,
-                    enabled = !state.busy && !state.reviewRequired,
+                    enabled = !state.busy && !state.remoteOperation && !state.reviewRequired,
                     label = { Text("项目名") },
                     supportingText = { Text("${d.project.codePointCount(0, d.project.length)} / $TIME_PROJECT_LIMIT 字符") },
                     modifier = Modifier.fillMaxWidth())
@@ -105,7 +106,7 @@ fun TimeScreen(viewModel: TimeViewModel) {
                     state.running.forEach { record ->
                         OutlinedButton(
                             onClick = { viewModel.prepareStop(record.id) },
-                            enabled = !state.busy && !state.reviewRequired,
+                            enabled = !state.busy && !state.remoteOperation && !state.reviewRequired,
                             shape = RoundedCornerShape(3.dp),
                             modifier = Modifier.fillMaxWidth()) {
                             Column(Modifier.fillMaxWidth()) {
@@ -127,10 +128,10 @@ fun TimeScreen(viewModel: TimeViewModel) {
         }
         Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (state.draft == null) {
-                Button(onClick = viewModel::beginStart, enabled = !state.busy && !state.reviewRequired) { Text("开始项目") }
+                Button(onClick = viewModel::beginStart, enabled = !state.busy && !state.remoteOperation && !state.reviewRequired) { Text("开始项目") }
                 TextButton(onClick = viewModel::reload, enabled = !state.busy) { Text("重新读取") }
             } else {
-                Button(onClick = viewModel::prepareStart, enabled = !state.busy && !state.reviewRequired) { Text("核对追加") }
+                Button(onClick = viewModel::prepareStart, enabled = !state.busy && !state.remoteOperation && !state.reviewRequired) { Text("核对追加") }
                 TextButton(onClick = { cancelEditor() }, enabled = !state.busy) { Text("取消") }
             }
         }

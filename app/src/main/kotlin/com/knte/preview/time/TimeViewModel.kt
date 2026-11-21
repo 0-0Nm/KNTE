@@ -16,7 +16,7 @@ const val TIME_PROJECT_LIMIT = 96
 const val TIME_STORE_LABEL = "本 App 私有隔离库 · timetrack"
 data class TimeDraft(val project: String = "") { val dirty get() = project.isNotEmpty() }
 data class TimeConfirmation(val op: String, val handle: OpaqueHostHandle, val targetId: String, val project: String, val date: String, val start: String, val end: String?, val endDate: String?)
-data class TimeUiState(val records: List<TimeRecord> = emptyList(), val loaded: Boolean = false, val draft: TimeDraft? = null, val busy: Boolean = false, val confirmation: TimeConfirmation? = null, val error: String? = null, val notice: String? = null, val reviewRequired: Boolean = false) { val running get() = records.filter { it.running() }; val hasUnsavedChanges get() = draft?.dirty == true; val canLeave get() = !busy && !hasUnsavedChanges }
+data class TimeUiState(val records: List<TimeRecord> = emptyList(), val loaded: Boolean = false, val draft: TimeDraft? = null, val busy: Boolean = false, val confirmation: TimeConfirmation? = null, val error: String? = null, val notice: String? = null, val reviewRequired: Boolean = false, val remoteOperation: Boolean = false) { val running get() = records.filter { it.running() }; val hasUnsavedChanges get() = draft?.dirty == true; val canLeave get() = !busy && !hasUnsavedChanges }
 
 class TimeViewModel(private val authority: AppTimeAuthority, private val handle: SavedStateHandle = SavedStateHandle()) : ViewModel() {
     // Per-instance owner token: prepare/confirm/cancel are bound to THIS surface instance,
@@ -37,37 +37,38 @@ class TimeViewModel(private val authority: AppTimeAuthority, private val handle:
     }
 
     private fun observe(st: AuthorityState) {
-        val v = when (val p = st.phase) {
-            is AuthorityPhase.Ready -> p.view
-            is AuthorityPhase.Review -> p.view
-            is AuthorityPhase.Failed -> p.view
-            else -> null
-        }
-        // Never overwrites busy/confirmation/draft: those belong to THIS surface's explicit
-        // local flow; records/review/error follow the authority so cross-surface changes
-        // (monitor confirm/cancel, review transitions) no longer show stale data.
+        val phase = st.phase
+        val view = st.latestView
+        val review = phase is AuthorityPhase.Review || view?.reviewRequired == true
         _state.value = _state.value.copy(
-            records = v?.records ?: _state.value.records,
-            loaded = v != null || _state.value.loaded,
-            reviewRequired = v?.reviewRequired == true,
-            error = v?.readError,
+            records = view?.records ?: _state.value.records,
+            loaded = view != null || _state.value.loaded,
+            reviewRequired = review,
+            remoteOperation = phase is AuthorityPhase.Busy ||
+                (phase is AuthorityPhase.Preparing && st.owners[owner]?.handle == null),
+            error = when (phase) {
+                is AuthorityPhase.Review -> phase.message
+                is AuthorityPhase.Failed -> phase.message
+                else -> view?.readError
+            },
+            confirmation = _state.value.confirmation.takeUnless { review },
         )
     }
 
     fun reload() { if (_state.value.busy) return; _state.value = _state.value.copy(busy = true); viewModelScope.launch { runCatching { authority.reload() }.onSuccess { sync() }.onFailure { fail(it) } } }
-    fun beginStart() { if (!_state.value.busy && !_state.value.reviewRequired && _state.value.draft == null) draft(TimeDraft()) }
-    fun projectChanged(value: String) { if (!_state.value.busy && !_state.value.reviewRequired && _state.value.draft != null && value.codePointCount(0, value.length) <= TIME_PROJECT_LIMIT) draft(TimeDraft(value)) }
-    fun prepareStart() { val d = _state.value.draft ?: return; if (_state.value.busy || _state.value.reviewRequired) return; _state.value = _state.value.copy(busy=true); viewModelScope.launch {
+    fun beginStart() { if (!_state.value.busy && !_state.value.remoteOperation && !_state.value.reviewRequired && _state.value.draft == null) draft(TimeDraft()) }
+    fun projectChanged(value: String) { if (!_state.value.busy && !_state.value.remoteOperation && !_state.value.reviewRequired && _state.value.draft != null && value.codePointCount(0, value.length) <= TIME_PROJECT_LIMIT) draft(TimeDraft(value)) }
+    fun prepareStart() { val d = _state.value.draft ?: return; if (_state.value.busy || _state.value.remoteOperation || _state.value.reviewRequired) return; _state.value = _state.value.copy(busy=true); viewModelScope.launch {
         runCatching { authority.prepareStart(d.project, owner) }
             .onSuccess { h -> _state.value = _state.value.copy(busy=false, confirmation=confirmationFromAuthority("start", h, fallbackProject=d.project)) }
             .onFailure { fail(it) }
     } }
-    fun prepareStop(id: String) { if (_state.value.busy || _state.value.reviewRequired) return; _state.value = _state.value.copy(busy=true); viewModelScope.launch {
+    fun prepareStop(id: String) { if (_state.value.busy || _state.value.remoteOperation || _state.value.reviewRequired) return; _state.value = _state.value.copy(busy=true); viewModelScope.launch {
         runCatching { authority.prepareStop(id, owner) }
             .onSuccess { h -> _state.value = _state.value.copy(busy=false, confirmation=confirmationFromAuthority("stop", h, fallbackProject=_state.value.records.firstOrNull { it.id == id }?.project ?: "")) }
             .onFailure { fail(it) }
     } }
-    fun confirmCommit() { val c = _state.value.confirmation ?: return; if (_state.value.busy || _state.value.reviewRequired) return; _state.value = _state.value.copy(busy=true); viewModelScope.launch { runCatching { authority.confirm(c.handle, owner) }.onSuccess { result -> clearDraft(); _state.value = _state.value.copy(busy=false,confirmation=null,draft=null,notice="已确认 ${result.op}；历史回执 runningAfter=${result.runningAfter}，当前运行视图已独立重读") }.onFailure { t -> fail(t, review=false); _state.value = _state.value.copy(confirmation=c) } } }
+    fun confirmCommit() { val c = _state.value.confirmation ?: return; if (_state.value.busy || _state.value.reviewRequired) return; _state.value = _state.value.copy(busy=true); viewModelScope.launch { runCatching { authority.confirm(c.handle, owner) }.onSuccess { result -> clearDraft(); _state.value = _state.value.copy(busy=false,confirmation=null,draft=null,notice="已确认 ${result.op}；历史回执 runningAfter=${result.runningAfter}，当前运行视图已独立重读") }.onFailure { t -> val review = authority.state.value.phase is AuthorityPhase.Review; fail(t, review); _state.value = _state.value.copy(confirmation=c.takeUnless { review }) } } }
 
     /** Dialog cancel/dismiss actually cancels the issued prepare through the authority
      *  (owner-scoped): no orphan host handle, no silent TIME_CONTROL_UNRESOLVED_OP. */
@@ -83,13 +84,14 @@ class TimeViewModel(private val authority: AppTimeAuthority, private val handle:
     }
 
     /** Preserve the draft and bound handle until exact cancellation has succeeded. */
-    fun discard() {
+    fun discard(onSuccess: () -> Unit = {}) {
         if (_state.value.busy || _state.value.reviewRequired) return
         val pending = _state.value.confirmation
-        if (_state.value.draft == null && pending == null) return
+        if (_state.value.draft == null && pending == null) { onSuccess(); return }
         fun finish() {
             clearDraft()
             _state.value = _state.value.copy(busy=false, draft=null, confirmation=null, notice="已放弃当前草稿；未写入")
+            onSuccess()
         }
         if (pending == null) { finish(); return }
         _state.value = _state.value.copy(busy=true)
@@ -114,7 +116,10 @@ class TimeViewModel(private val authority: AppTimeAuthority, private val handle:
 
     private fun draft(d: TimeDraft) { handle["time.draft"] = true; handle["time.project"] = d.project; _state.value = _state.value.copy(draft=d,confirmation=null,error=null,notice=null) }
     private fun clearDraft() { handle.remove<Boolean>("time.draft"); handle.remove<String>("time.project") }
-    private fun sync() { val v=authority.currentView(); _state.value = _state.value.copy(records=v?.records.orEmpty(),loaded=v!=null,busy=false,reviewRequired=v?.reviewRequired==true,error=v?.readError) }
+    private fun sync() {
+        observe(authority.state.value)
+        _state.value = _state.value.copy(busy=false)
+    }
     private fun fail(t: Throwable, review: Boolean=false) { val v=authority.currentView(); _state.value = _state.value.copy(busy=false,reviewRequired=review || v?.reviewRequired==true,error=t.message ?: "计时操作失败") }
 
     override fun onCleared() {

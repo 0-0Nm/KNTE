@@ -150,4 +150,42 @@ class TimeAuthorityCoreTest {
         assertTrue(core.state.value.phase is AuthorityPhase.Ready)
         Unit
     }
+    @Test fun definiteBaselineRefusalReleasesSlotOnOwnerClose() = runBlocking {
+        val ledger = tmp.newFolder("baseline-ledger")
+        val first = TimeAuthorityCore.open(ledger, tmp.newFolder("baseline-intents"))
+        first.initialize(); first.openOwner("page")
+        val stale = first.prepareStart("旧基线", "page")
+        val other = com.knte.core.time.control.TimeSessionSource.open(ledger).controller()
+        other.confirm(other.prepareStart("外部变更"))
+        try { first.confirm(stale, "page"); fail("must refuse stale baseline") }
+        catch (e: TimeControlException) { assertEquals("TIME_BASELINE_CHANGED", e.code) }
+        first.closeOwner("page", "test-close")
+        first.openOwner("monitor")
+        val next = first.prepareStart("新会话", "monitor")
+        first.cancel(next, "monitor")
+        assertEquals(listOf("外部变更"), first.currentView()?.records?.map { it.project })
+    }
+
+    @Test fun unreadableLedgerAfterPreparePreservesDurableIntentAndBlocksRetryOrCancel() = runBlocking {
+        val ledger = tmp.newFolder("review-ledger")
+        val journal = tmp.newFolder("review-intents")
+        val core = TimeAuthorityCore.open(ledger, journal)
+        core.initialize(); core.openOwner("page")
+        val h = core.prepareStart("提交待核", "page")
+        val pending = java.io.File(ledger, "timetrack.jsonl.pending")
+        pending.writeText("synthetic pending\n")
+        try { core.confirm(h, "page"); fail("must refuse unreadable ledger") }
+        catch (e: TimeControlException) { assertEquals("TIME_PENDING_REVIEW_REQUIRED", e.code) }
+        assertTrue(core.state.value.phase is AuthorityPhase.Review)
+        val retained = FileTimeIntentJournal(journal).loadAll().single()
+        try { core.cancel(h, "page"); fail("must refuse cancel during review") }
+        catch (e: TimeControlException) { assertEquals("TIME_REVIEW_REQUIRED", e.code) }
+        try { core.confirm(h, "page"); fail("must refuse a confirm retry") }
+        catch (e: TimeControlException) { assertEquals("TIME_REVIEW_REQUIRED", e.code) }
+        core.closeOwner("page", "test-close")
+        assertTrue(core.state.value.phase is AuthorityPhase.Review)
+        assertEquals(listOf(retained), FileTimeIntentJournal(journal).loadAll())
+        assertTrue(pending.exists())
+    }
+
 }
