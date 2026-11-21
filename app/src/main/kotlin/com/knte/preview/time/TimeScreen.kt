@@ -92,8 +92,7 @@ fun TimeScreen(viewModel: TimeViewModel) {
                         Text("需要先人工核对", style = MaterialTheme.typography.titleMedium)
                         Text("上次写入结果尚未确认，或读取仍不完整。请先看下方记录；应用不会自动重试、清除待核标记或补写停止事件。")
                         state.recovery.notWritten.forEach { recovered ->
-                            Text("恢复核对：${recovered.project}
-${if (recovered.op == "start") "开始" else "停止"} · ${recovered.date} ${recovered.start}")
+                            Text("恢复核对：${recovered.project}\n${if (recovered.op == "start") "开始" else "停止"} · ${recovered.date} ${recovered.start}")
                             Text("严格读取后没有找到对应事件。确认后只移除这条恢复提示，不补写原操作。", style = MaterialTheme.typography.bodySmall)
                             OutlinedButton(onClick = { viewModel.dropRecoveredIntent(recovered.nonce) }, enabled = !state.busy) {
                                 Text("确认未写入，移除此提示")
