@@ -8,7 +8,9 @@ import android.os.Build
 import android.provider.Settings
 
 internal data class MonitorAccess(val overlay: Boolean, val notifications: Boolean) {
-    val allowed: Boolean get() = overlay && notifications
+    /** Overlay is the only monitor gate. Notification denial hides/demotes system notice
+     *  visibility, but does not disable the user-visible floating timer or page timer. */
+    val allowed: Boolean get() = overlay
 }
 
 internal fun monitorAccess(context: Context) = MonitorAccess(

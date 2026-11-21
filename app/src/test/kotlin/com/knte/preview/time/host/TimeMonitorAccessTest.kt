@@ -4,17 +4,18 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TimeMonitorAccessTest {
-    @Test fun bothGrantsAreRequired() {
+    @Test fun overlayAloneGatesTheVisibleFloatingMonitor() {
         assertFalse(MonitorAccess(overlay = false, notifications = false).allowed)
-        assertFalse(MonitorAccess(overlay = true, notifications = false).allowed)
+        assertTrue(MonitorAccess(overlay = true, notifications = false).allowed)
         assertFalse(MonitorAccess(overlay = false, notifications = true).allowed)
         assertTrue(MonitorAccess(overlay = true, notifications = true).allowed)
     }
 
-    @Test fun eachRevocationBlocksFurtherMonitorActions() {
+    @Test fun notificationRevocationDoesNotDisableOverlayOrPageTimer() {
         val granted = MonitorAccess(overlay = true, notifications = true)
         assertFalse(granted.copy(overlay = false).allowed)
-        assertFalse(granted.copy(notifications = false).allowed)
+        assertTrue(granted.copy(notifications = false).allowed)
+        assertFalse(granted.copy(notifications = false).notifications)
     }
 
     @Test fun hiddenWindowKeepsMonitorRunningButFailureDoesNot() {

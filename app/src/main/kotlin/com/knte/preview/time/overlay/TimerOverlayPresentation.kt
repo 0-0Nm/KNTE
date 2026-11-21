@@ -39,7 +39,10 @@ object TimerOverlaySelectionResolver {
     }
 
     fun resolve(snapshot: TimerOverlaySnapshot, selectedTargetId: String?): TimerOverlayTarget? {
-        val id = selectedTargetId?.takeIf { it.isNotBlank() } ?: return null
+        // A sole running record is already unambiguous. Only parallel records require a choice.
+        // A non-null stale/blank selection never falls back to a different record.
+        if (selectedTargetId == null) return snapshot.running.singleOrNull()
+        val id = selectedTargetId.takeIf { it.isNotBlank() } ?: return null
         return snapshot.running.singleOrNull { it.id == id }
     }
 }
@@ -47,7 +50,9 @@ object TimerOverlaySelectionResolver {
 sealed interface TimerOverlayPhase {
     data object Unloaded : TimerOverlayPhase
     data class Idle(val snapshot: TimerOverlaySnapshot) : TimerOverlayPhase
-    /** selectedTargetId is null when multiple targets require an explicit choice. */
+    /** Editor for an additional record; existing running records remain untouched. */
+    data class StartingNew(val snapshot: TimerOverlaySnapshot) : TimerOverlayPhase
+    /** Null selects a sole unambiguous record; parallel records require an explicit choice. */
     data class Running(
         val snapshot: TimerOverlaySnapshot,
         val selectedTargetId: String? = null,
@@ -56,6 +61,7 @@ sealed interface TimerOverlayPhase {
         val projectText: String,
         val handle: OpaqueHandle,
         val eventTimes: TimerOverlayEventTimes? = null,
+        val sourceText: String = "本地时记",
     ) : TimerOverlayPhase
     data class PreparingStop(
         val target: TimerOverlayTarget,
@@ -99,6 +105,8 @@ sealed interface TimerOverlayIntent {
     data class SelectTarget(val targetId: String) : TimerOverlayIntent {
         init { require(targetId.isNotBlank()) }
     }
+    data object NewProject : TimerOverlayIntent
+    data object CancelNewProject : TimerOverlayIntent
     data object ToggleExpanded : TimerOverlayIntent
     data object Hide : TimerOverlayIntent
 }
@@ -150,23 +158,28 @@ object TimerOverlayText {
         }
     }
 
-    fun projectEditable(phase: TimerOverlayPhase): Boolean = phase is TimerOverlayPhase.Idle
+    fun projectEditable(phase: TimerOverlayPhase): Boolean =
+        phase is TimerOverlayPhase.Idle || phase is TimerOverlayPhase.StartingNew
 
     fun preparingDetails(phase: TimerOverlayPhase): String = when (phase) {
         is TimerOverlayPhase.PreparingStart ->
-            "项目：${phase.projectText}\n来源：主机待核对\n计划开始：${phase.eventTimes?.startText ?: "主机未提供"}"
+            "项目：${phase.projectText}\n来源：${phase.sourceText}\n开始时间：${phase.eventTimes?.startText ?: "待读取"}\n确认后才会写入；取消不改变现有记录。"
         is TimerOverlayPhase.PreparingStop -> targetDetails(phase.target) +
-            "\n计划开始：${phase.eventTimes?.startText ?: "主机未提供"}" +
-            "\n计划停止：${phase.eventTimes?.endText ?: "主机未提供"}"
+            "\n开始时间：${phase.eventTimes?.startText ?: "待读取"}" +
+            "\n停止时间：${phase.eventTimes?.endText ?: "待读取"}\n只会结束这一条记录。"
         else -> ""
     }
 
     fun phaseLabel(phase: TimerOverlayPhase): String = when (phase) {
         TimerOverlayPhase.Unloaded -> "尚未加载"
-        is TimerOverlayPhase.Idle -> "空闲"
-        is TimerOverlayPhase.Running -> if (phase.snapshot.running.size > 1) "运行中 · 请选择目标" else "运行中"
-        is TimerOverlayPhase.PreparingStart -> "准备核对 · 开始"
-        is TimerOverlayPhase.PreparingStop -> "准备核对 · 停止"
+        is TimerOverlayPhase.Idle -> "没有正在计时的项目"
+        is TimerOverlayPhase.StartingNew -> "另起项目 · 现有 ${phase.snapshot.running.size} 项继续计时"
+        is TimerOverlayPhase.Running -> when {
+            phase.snapshot.running.size > 1 && TimerOverlaySelectionResolver.resolve(phase) == null -> "运行中 · 请选择要停止的项目"
+            else -> "运行中 · ${phase.snapshot.running.size} 项"
+        }
+        is TimerOverlayPhase.PreparingStart -> "核对开始"
+        is TimerOverlayPhase.PreparingStop -> "核对停止"
         is TimerOverlayPhase.Busy -> "处理中"
         is TimerOverlayPhase.PendingReview -> "待人工核对"
         is TimerOverlayPhase.Failed -> "读取失败 · 显示上次可用"
@@ -175,7 +188,7 @@ object TimerOverlayText {
 
     fun targetDetails(target: TimerOverlayTarget): String = buildString {
         append("项目：").append(target.projectText)
-        append("\n目标：").append(target.id)
+        append("\n记录编号：").append(target.id)
         append("\n开始：").append(target.startedAtText)
         append("\n来源：").append(target.sourceText)
         target.minuteFactText?.let { append("\n分钟事实：").append(it) }

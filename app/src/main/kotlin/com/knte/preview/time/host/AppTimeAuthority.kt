@@ -33,6 +33,7 @@ class AppTimeAuthority private constructor(
     suspend fun confirm(handle: OpaqueHostHandle, owner: String) = core.confirm(handle, owner)
     suspend fun cancel(handle: OpaqueHostHandle, owner: String) = core.cancel(handle, owner)
     suspend fun acknowledgeReview() = core.acknowledgeReview()
+    suspend fun dropRecoveredIntent(nonce: String) = core.dropRecoveredIntent(nonce)
     suspend fun closeOwner(owner: String, reason: String) = core.closeOwner(owner, reason)
     fun closeOwnerDetached(owner: String, reason: String) = core.closeOwnerDetached(owner, reason)
     fun sessionOf(handle: OpaqueHostHandle): com.knte.core.time.control.SessionHandle? = core.sessionOf(handle)

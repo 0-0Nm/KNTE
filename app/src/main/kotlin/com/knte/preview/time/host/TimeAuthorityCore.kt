@@ -158,6 +158,16 @@ class TimeAuthorityCore private constructor(
         withContext(io) { publish(controller.viewSnapshot()) }
     } }
 
+    /** Explicitly resolves ONLY an intent freshly proven absent by the controller. The core
+     *  re-reconciles before DROP; unknown/mismatch/pending cases remain refused. */
+    suspend fun dropRecoveredIntent(nonce: String) = serial.withLock {
+        if (hasUncertain()) throw TimeControlException("TIME_REVIEW_REQUIRED", "关闭清理或提交结果待核")
+        withContext(io) {
+            controller.resolveRecoveredIntent(nonce, com.knte.core.time.control.RecoveredIntentDecision.DROP)
+            publish(controller.viewSnapshot())
+        }
+    }
+
     suspend fun acknowledgeReview() = serial.withLock {
         if (hasUncertain()) throw TimeControlException("TIME_REVIEW_REQUIRED", "关闭清理或提交结果待核")
         withContext(io) { publish(controller.acknowledgeReviewAfterHumanResolution()) } }

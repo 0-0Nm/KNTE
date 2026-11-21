@@ -346,6 +346,8 @@ class TimeSessionControllerTest {
         val report = c2.recoverPendingIntents()
         assertEquals(listOf("n-lost"), report.notWrittenNonces)
         assertTrue(report.confirmed.isEmpty())
+        assertEquals("丢失", c2.viewSnapshot().recovery.notWritten.single().project)
+        assertTrue(c2.viewSnapshot().recovery.manual.isEmpty())
         rejectsCode("TIME_REVIEW_REQUIRED") { c2.prepareStart(project = "晨读") }
         // DROP resolves it; block lifts without any write.
         c2.resolveRecoveredIntent("n-lost", RecoveredIntentDecision.DROP)

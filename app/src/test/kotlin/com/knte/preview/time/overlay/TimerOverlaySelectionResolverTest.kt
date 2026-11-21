@@ -12,7 +12,12 @@ class TimerOverlaySelectionResolverTest {
         assertEquals(a, TimerOverlaySelectionResolver.resolve(TimerOverlaySnapshot(listOf(a, b)), "a"))
     }
 
-    @Test fun nullBlankAndUnknownSelectionFailClosed() {
+    @Test fun soleRunningRecordIsDirectlyActionableWithoutRedundantSelection() {
+        assertEquals(a, TimerOverlaySelectionResolver.resolve(TimerOverlaySnapshot(listOf(a)), null))
+        assertEquals(a, TimerOverlaySelectionResolver.resolve(TimerOverlayPhase.Running(TimerOverlaySnapshot(listOf(a)))))
+    }
+
+    @Test fun nullBlankAndUnknownSelectionFailClosedForParallelRecords() {
         val snapshot = TimerOverlaySnapshot(listOf(a, b))
         assertNull(TimerOverlaySelectionResolver.resolve(snapshot, null))
         assertNull(TimerOverlaySelectionResolver.resolve(snapshot, "   "))
@@ -38,6 +43,7 @@ class TimerOverlaySelectionResolverTest {
     @Test fun nonRunningPhasesNeverResolveStopTargets() {
         val snapshot = TimerOverlaySnapshot(listOf(a))
         assertNull(TimerOverlaySelectionResolver.resolve(TimerOverlayPhase.Idle(snapshot)))
+        assertNull(TimerOverlaySelectionResolver.resolve(TimerOverlayPhase.StartingNew(snapshot)))
         assertNull(TimerOverlaySelectionResolver.resolve(TimerOverlayPhase.Busy("busy")))
         assertNull(TimerOverlaySelectionResolver.resolve(TimerOverlayPhase.PendingReview("review", snapshot)))
         assertNull(TimerOverlaySelectionResolver.resolve(TimerOverlayPhase.PreparingStop(a, OpaqueHandle("h"))))

@@ -31,11 +31,11 @@ class TimeMonitorService : Service() {
     private var owned: OpaqueHostHandle? = null
     private var started = false
 
-    /** Explicit selection: null == no explicit choice yet. A stale selection that no longer
-     *  matches the live running snapshot is invalidated instead of implicitly falling back
-     *  to another running record (regression fix: removing A must never let stop act on B). */
+    /** Null means no explicit choice: a sole record is unambiguous, parallel records are not.
+     *  A stale non-null selection is never replaced by another running record implicitly. */
     private var selected: String? = null
-    private var expanded = true
+    private var expanded = false
+    private var startingNew = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -51,6 +51,7 @@ class TimeMonitorService : Service() {
                         )
                         startForeground(NOTIFICATION_ID, notification())
                         started = true
+                        authority.setMonitor(true)
                     } catch (_: RuntimeException) {
                         failNow()
                         return START_NOT_STICKY
@@ -90,6 +91,7 @@ class TimeMonitorService : Service() {
     }
 
     private fun failNow() {
+        authority.setMonitor(false)
         _status.value = MonitorStatus.Failed
         stopSelf()
     }
@@ -158,6 +160,7 @@ class TimeMonitorService : Service() {
         panelLayout = null
         elapsedClock.reset()
         selected = null
+        startingNew = false
     }
 
     private suspend fun closeOwnerScoped() {
@@ -181,12 +184,18 @@ class TimeMonitorService : Service() {
                     when (intent) {
                         is TimerOverlayIntent.Start -> if (authority.state.value.phase is AuthorityPhase.Ready) {
                             owned = authority.prepareStart(intent.projectText, owner)
+                            startingNew = false
                         }
-                        is TimerOverlayIntent.Stop -> if (authority.state.value.phase is AuthorityPhase.Ready) {
-                            // Stop acts only on the explicitly selected target: never infer.
+                        is TimerOverlayIntent.Stop -> if (authority.state.value.phase is AuthorityPhase.Ready && !startingNew) {
+                            // One running record is unambiguous; parallel records require explicit selection.
                             val target = resolveSelectedForAction()
                             if (target == intent.targetId) owned = authority.prepareStop(intent.targetId, owner)
                         }
+                        TimerOverlayIntent.NewProject -> {
+                            val phase = authority.state.value.phase
+                            if (phase is AuthorityPhase.Ready && phase.view.records.any { it.running() }) startingNew = true
+                        }
+                        TimerOverlayIntent.CancelNewProject -> startingNew = false
                         is TimerOverlayIntent.Confirm -> {
                             val mine = ownedHandleSnapshot()
                             if (mine?.value == intent.handle.value && authority.ownedHandle(owner) == mine) {
@@ -217,8 +226,8 @@ class TimeMonitorService : Service() {
         }
     }
 
-    /** Explicit-selection policy: an expired selection is dropped; without an explicit
-     *  selection there is NO action fallback — the panel shows "请选择目标". */
+    /** A sole record needs no redundant selection. An expired non-null selection is retained
+     *  as invalid evidence and never falls back to a different running record. */
     private fun resolveSelectedForAction(): String? {
         val v = authority.currentView() ?: return null
         return MonitorSelectionPolicy.explicitActionTarget(selected, v.records.filter { it.running() }.map { it.id })
@@ -259,8 +268,12 @@ class TimeMonitorService : Service() {
                     )
                 }
                 val readyPhase = when {
-                    p.view.reviewRequired || p.view.readError != null -> TimerOverlayPhase.PendingReview("待人工核对")
-                    running.isEmpty() -> TimerOverlayPhase.Idle(snapshot)
+                    p.view.reviewRequired || p.view.readError != null -> TimerOverlayPhase.PendingReview("待人工核对", snapshot)
+                    running.isEmpty() -> {
+                        startingNew = false
+                        TimerOverlayPhase.Idle(snapshot)
+                    }
+                    startingNew -> TimerOverlayPhase.StartingNew(snapshot)
                     else -> TimerOverlayPhase.Running(snapshot, target)
                 }
                 targetPanel.render(TimerOverlayPresentation(readyPhase, TimerOverlayMonitor.Running, expanded = expanded, clockText = clockText))
@@ -299,6 +312,7 @@ class TimeMonitorService : Service() {
 
     override fun onDestroy() {
         detach()
+        authority.setMonitor(false)
         authority.closeOwnerDetached(owner, "monitor-destroyed")
         if (_status.value != MonitorStatus.Failed) _status.value = MonitorStatus.Off
         scope.cancel()
@@ -321,13 +335,15 @@ class TimeMonitorService : Service() {
 
 internal enum class MonitorStatus(val label: String, val active: Boolean = false, val visible: Boolean = false) {
     Off("未开启"), Visible("浮窗已显示", true, true), Hidden("运行中，浮窗已隐藏", true),
-    Failed("未开启：请检查悬浮窗和通知设置")
+    Failed("悬浮监控未运行，请检查悬浮窗权限后重试")
 }
 
-/** Pure, testable action-target policy. Display may show the sole running record, but a
- *  stop action requires an EXPLICIT selection that still matches the live snapshot:
- *  no implicit fallback (removing A must never silently aim stop at B). */
+/** Pure action-target policy: a sole running record is directly actionable. Multiple records
+ *  require an exact current selection; a stale non-null selection never falls back to another. */
 internal object MonitorSelectionPolicy {
-    fun explicitActionTarget(selected: String?, runningIds: List<String>): String? =
-        selected?.takeIf { it.isNotBlank() && runningIds.contains(it) }
+    fun explicitActionTarget(selected: String?, runningIds: List<String>): String? = when {
+        selected == null -> runningIds.singleOrNull()
+        selected.isNotBlank() && runningIds.count { it == selected } == 1 -> selected
+        else -> null
+    }
 }

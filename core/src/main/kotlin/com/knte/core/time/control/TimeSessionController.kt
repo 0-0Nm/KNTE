@@ -157,6 +157,11 @@ data class RecoveryReport(
 
 enum class RecoveredIntentDecision { DROP, RESUBMIT_CONFIRM_REQUIRED }
 
+data class TimeRecoveryView(
+    val notWritten: List<TimePendingIntent> = emptyList(),
+    val manual: List<TimePendingIntent> = emptyList(),
+)
+
 /** Read-only view. [readError] is non-null when the store refused to load (never reported as empty). */
 data class TimeControlView(
     val sourceLabel: String,
@@ -165,7 +170,8 @@ data class TimeControlView(
     val runningCount: Int,
     val reviewRequired: Boolean,
     val unresolvedOp: UnresolvedOpView?,
-    val readError: String?
+    val readError: String?,
+    val recovery: TimeRecoveryView = TimeRecoveryView(),
 )
 
 data class UnresolvedOpView(
@@ -236,6 +242,7 @@ class TimeSessionController private constructor(
      *  intents that mismatch in any way (manual review only, never resolvable by an enum). */
     private val recoveredNotWritten = HashSet<String>()
     private val recoveredManual = HashSet<String>()
+    private var recoveredDetails: Map<String, TimePendingIntent> = emptyMap()
 
     /** True once the attached journal has been classified by a full reconcile in this process. */
     private var reconciled = false
@@ -482,6 +489,7 @@ class TimeSessionController private constructor(
             }
         }
         recoveredNotWritten.remove(nonce)
+        recoveredDetails = recoveredDetails - nonce
     }
 
     // ---- internals ---------------------------------------------------------
@@ -522,6 +530,7 @@ class TimeSessionController private constructor(
         if (intents.isEmpty()) {
             recoveredNotWritten.clear()
             recoveredManual.clear()
+            recoveredDetails = emptyMap()
             reconciled = true
             return RecoveryReport(emptyList(), emptyList(), manualReviewRequired = false)
         }
@@ -533,6 +542,7 @@ class TimeSessionController private constructor(
             val nonces = intents.map { it.nonce }
             recoveredNotWritten.clear()
             recoveredManual.clear()
+            recoveredDetails = intents.associateBy { it.nonce }
             recoveredManual.addAll(nonces)
             reconciled = true
             return RecoveryReport(emptyList(), emptyList(), manualReviewRequired = true)
@@ -574,6 +584,7 @@ class TimeSessionController private constructor(
         recoveredNotWritten.addAll(notWritten)
         recoveredManual.clear()
         recoveredManual.addAll(manual)
+        recoveredDetails = intents.filter { it.nonce in notWritten || it.nonce in manual }.associateBy { it.nonce }
         reconciled = true
         return RecoveryReport(confirmedResults, notWritten.toList(), manual.isNotEmpty())
     }
@@ -802,15 +813,21 @@ class TimeSessionController private constructor(
     private fun viewOf(snapshot: TimeSnapshot?, readError: String?): TimeControlView {
         if (snapshot == null) {
             return TimeControlView(sourceLabel, null, emptyList(), 0,
-                reviewRequired = true, unresolvedOp = current?.handle?.let(::view), readError = readError)
+                reviewRequired = true, unresolvedOp = current?.handle?.let(::view), readError = readError,
+                recovery = recoveryView())
         }
         val view = current?.handle?.let(::view)
         return TimeControlView(sourceLabel, snapshot.revision, snapshot.projection.records,
             snapshot.projection.runningCount,
             reviewRequired = reviewFlag || readError != null ||
                 recoveredNotWritten.isNotEmpty() || recoveredManual.isNotEmpty(),
-            unresolvedOp = view, readError = readError)
+            unresolvedOp = view, readError = readError, recovery = recoveryView())
     }
+
+    private fun recoveryView() = TimeRecoveryView(
+        notWritten = recoveredDetails.values.filter { it.nonce in recoveredNotWritten },
+        manual = recoveredDetails.values.filter { it.nonce in recoveredManual },
+    )
 
     private fun view(h: SessionHandle) = UnresolvedOpView(
         nonce = h.nonce, op = h.op, eventId = h.eventId, targetId = h.targetId,

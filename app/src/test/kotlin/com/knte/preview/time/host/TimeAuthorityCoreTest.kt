@@ -127,13 +127,56 @@ class TimeAuthorityCoreTest {
         Unit
     }
 
-    @Test fun staleExplicitSelectionNeverFallsBackToAnotherRunningTarget() {
-        // Regression: explicit A removed -> no implicit stop against B.
+    @Test fun selectionIsDirectOnlyForSoleRecordAndNeverFallsBackAfterStaleChoice() {
         assertNull(MonitorSelectionPolicy.explicitActionTarget("A", listOf("B", "C")))
         assertEquals("B", MonitorSelectionPolicy.explicitActionTarget("B", listOf("B", "C")))
-        assertNull(MonitorSelectionPolicy.explicitActionTarget(null, listOf("B")))
+        assertEquals("B", MonitorSelectionPolicy.explicitActionTarget(null, listOf("B")))
+        assertNull(MonitorSelectionPolicy.explicitActionTarget("A", listOf("B")))
         assertNull(MonitorSelectionPolicy.explicitActionTarget("", listOf("B")))
+        assertNull(MonitorSelectionPolicy.explicitActionTarget(null, listOf("B", "C")))
+        assertNull(MonitorSelectionPolicy.explicitActionTarget("B", listOf("B", "B")))
         assertNull(MonitorSelectionPolicy.explicitActionTarget("B", emptyList()))
+    }
+
+    @Test fun humanResolutionCanReleaseReadReviewButNeverSkipsStrictReload() = runBlocking {
+        val ledger = tmp.newFolder("human-review-ledger")
+        val core = TimeAuthorityCore.open(ledger, tmp.newFolder("human-review-journal"))
+        val pending = java.io.File(ledger, "timetrack.jsonl.pending")
+        pending.writeText("synthetic unreadable write result\n")
+        try { core.initialize(); fail("pending marker must block the initial strict read") }
+        catch (e: TimeControlException) { assertEquals("TIME_PENDING_REVIEW_REQUIRED", e.code) }
+        // Simulates a human resolving the temporary store marker, not app auto-cleanup.
+        check(pending.delete())
+        core.acknowledgeReview()
+        assertTrue(core.state.value.phase is AuthorityPhase.Ready)
+        assertEquals(false, core.currentView()?.reviewRequired)
+        assertTrue(core.currentView()?.records?.isEmpty() == true)
+    }
+
+    @Test fun recoveredNotWrittenIsVisibleAndCanBeDroppedWithoutRewritingHistory() = runBlocking {
+        val ledger = tmp.newFolder("recovery-view-ledger")
+        val journalRoot = tmp.newFolder("recovery-view-journal")
+        val journal = FileTimeIntentJournal(journalRoot)
+        val saved = com.knte.core.time.control.TimePendingIntent(
+            nonce = "lost-start", op = "start", eventId = "missing-event", token = "missing-token",
+            recordId = "missing-record", project = "未落下的开始", date = "2026-11-21", start = "09:00",
+            end = null, endDate = null, baselineRevision = "0".repeat(64), createdAt = "2026-11-21T09:00",
+        )
+        journal.save(saved)
+        val core = TimeAuthorityCore.open(ledger, journalRoot)
+        core.initialize()
+        assertTrue(core.state.value.phase is AuthorityPhase.Review)
+        assertEquals(listOf(saved), core.currentView()?.recovery?.notWritten)
+        assertTrue(core.currentView()?.recovery?.manual?.isEmpty() == true)
+        core.openOwner("page")
+        core.dropRecoveredIntent(saved.nonce)
+        assertTrue(core.state.value.phase is AuthorityPhase.Ready)
+        assertTrue(journal.loadAll().isEmpty())
+        assertTrue(core.currentView()?.records?.isEmpty() == true)
+        // The old op is not replayed. A new operation needs a fresh prepare and explicit owner.
+        val fresh = core.prepareStart("新的开始", "page")
+        core.cancel(fresh, "page")
+        assertTrue(core.currentView()?.records?.isEmpty() == true)
     }
 
     @Test fun observeFlowPublishesOwnerAndMonitorFlagsWithoutDroppingPrepare() = runBlocking {
@@ -178,6 +221,8 @@ class TimeAuthorityCoreTest {
         catch (e: TimeControlException) { assertEquals("TIME_PENDING_REVIEW_REQUIRED", e.code) }
         assertTrue(core.state.value.phase is AuthorityPhase.Review)
         val retained = FileTimeIntentJournal(journal).loadAll().single()
+        try { core.dropRecoveredIntent(retained.nonce); fail("must not drop an intent while write result is unknown") }
+        catch (e: TimeControlException) { assertEquals("TIME_REVIEW_REQUIRED", e.code) }
         try { core.cancel(h, "page"); fail("must refuse cancel during review") }
         catch (e: TimeControlException) { assertEquals("TIME_REVIEW_REQUIRED", e.code) }
         try { core.confirm(h, "page"); fail("must refuse a confirm retry") }

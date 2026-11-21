@@ -10,7 +10,18 @@ class TimerOverlayPresentationTest {
     @Test fun multipleRunningNeverChoosesImplicitTarget() {
         val p = TimerOverlayPresentationMapper.running(TimerOverlaySnapshot(listOf(a, b)))
         assertNull((p.phase as TimerOverlayPhase.Running).selectedTargetId)
-        assertTrue(TimerOverlayText.phaseLabel(p.phase).contains("请选择目标"))
+        assertTrue(TimerOverlayText.phaseLabel(p.phase).contains("请选择要停止的项目"))
+    }
+
+    @Test fun startingAnotherProjectKeepsExistingRunningSnapshot() {
+        val snapshot = TimerOverlaySnapshot(listOf(a, b))
+        val phase = TimerOverlayPhase.StartingNew(snapshot)
+        assertSame(snapshot, phase.snapshot)
+        assertTrue(TimerOverlayText.projectEditable(phase))
+        assertTrue(TimerOverlayText.phaseLabel(phase).contains("2"))
+        assertNull(TimerOverlaySelectionResolver.resolve(phase))
+        assertTrue(TimerOverlayIntent.NewProject is TimerOverlayIntent.NewProject)
+        assertTrue(TimerOverlayIntent.CancelNewProject is TimerOverlayIntent.CancelNewProject)
     }
 
     @Test fun startStopIntentsCarryOnlyBoundedTextIdOrOpaqueHandle() {
