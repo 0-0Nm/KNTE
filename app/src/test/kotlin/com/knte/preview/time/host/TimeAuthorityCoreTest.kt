@@ -188,4 +188,29 @@ class TimeAuthorityCoreTest {
         assertTrue(pending.exists())
     }
 
+    @Test fun failedCloseRetainsOwnerBindingAndBlocksFurtherWrites() = runBlocking {
+        val failNext = java.util.concurrent.atomic.AtomicBoolean(false)
+        val dispatcher = object : kotlinx.coroutines.CoroutineDispatcher() {
+            override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
+                if (failNext.compareAndSet(true, false)) throw IllegalStateException("synthetic cancel dispatch failure")
+                kotlinx.coroutines.Dispatchers.IO.dispatch(context, block)
+            }
+        }
+        val core = TimeAuthorityCore.open(tmp.newFolder("close-ledger"), tmp.newFolder("close-journal"), dispatcher)
+        core.initialize(); core.openOwner("page")
+        val handle = core.prepareStart("关闭失败", "page")
+        failNext.set(true)
+        core.closeOwner("page", "test failure")
+        assertTrue(core.state.value.owners.getValue("page").closed)
+        assertEquals(handle, core.state.value.owners.getValue("page").handle)
+        assertNotNull(core.sessionOf(handle))
+        assertTrue(core.state.value.phase is AuthorityPhase.Review)
+        core.reload()
+        assertTrue(core.state.value.phase is AuthorityPhase.Review)
+        core.openOwner("monitor")
+        try { core.prepareStart("不得写入", "monitor"); fail("expected review block") }
+        catch (e: TimeControlException) { assertEquals("TIME_REVIEW_REQUIRED", e.code) }
+        assertTrue(checkNotNull(core.currentView()).records.isEmpty())
+    }
+
 }

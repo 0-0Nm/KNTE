@@ -158,31 +158,37 @@ class TimeAuthorityCore private constructor(
         withContext(io) { publish(controller.viewSnapshot()) }
     } }
 
-    suspend fun acknowledgeReview() = serial.withLock { withContext(io) { publish(controller.acknowledgeReviewAfterHumanResolution()) } }
+    suspend fun acknowledgeReview() = serial.withLock {
+        if (hasUncertain()) throw TimeControlException("TIME_REVIEW_REQUIRED", "关闭清理或提交结果待核")
+        withContext(io) { publish(controller.acknowledgeReviewAfterHumanResolution()) } }
 
     /** Owner-scoped lifecycle close. Serialized with in-flight prepare/confirm, so a
      *  concurrent confirm finishes first and leaves nothing to cancel. Cancels only this
      *  owner's exact still-unconfirmed local prepare; a failed cancel keeps the issued
      *  handle so the unresolved intent remains visible to review/recovery. */
     suspend fun closeOwner(owner: String, reason: String) = serial.withLock {
-        val rec = synchronized(ownersLock) { owners[owner] }
-        val handleValue = synchronized(ownersLock) { rec?.takeIf { !it.closed && !it.confirmAttempted }?.handle?.value }
-        synchronized(ownersLock) {
-            rec?.closed = true
-            rec?.closeReason = reason
-        }
-        if (handleValue != null) {
-            val session = issued[handleValue]
-            var cancelled = false
-            if (session != null) {
-                try { withContext(io) { controller.cancel(session) }; cancelled = true }
-                catch (e: CancellationException) { throw e }
-                catch (_: Exception) { /* keep issued; unresolved op stays discoverable; no retry/ack/clear */ }
+        withContext(NonCancellable) {
+            val rec = synchronized(ownersLock) { owners[owner] }
+            val handleValue = synchronized(ownersLock) { rec?.takeIf { !it.closed && !it.confirmAttempted }?.handle?.value }
+            synchronized(ownersLock) {
+                rec?.closed = true
+                rec?.closeReason = reason
             }
-            if (cancelled) issued.remove(handleValue)
-            synchronized(ownersLock) { rec?.clearHandle() }
+            if (handleValue != null) {
+                val session = issued[handleValue]
+                var cancelled = false
+                if (session != null) {
+                    try { withContext(io) { controller.cancel(session) }; cancelled = true }
+                    catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { /* keep issued; unresolved op stays discoverable; no retry/ack/clear */ }
+                }
+                if (cancelled) {
+                    issued.remove(handleValue)
+                    synchronized(ownersLock) { rec?.clearHandle() }
+                }
+            }
+            withContext(io) { publish(controller.viewSnapshot()) }
         }
-        withContext(io) { publish(controller.viewSnapshot()) }
     }
 
     /** (Re)opens an owner token in this process. Reopening never resurrects a stale handle
@@ -264,7 +270,7 @@ class TimeAuthorityCore private constructor(
     }
 
     private fun hasUncertain(): Boolean = synchronized(ownersLock) {
-        owners.values.any { it.handle != null && it.confirmAttempted }
+        owners.values.any { it.handle != null && (it.confirmAttempted || it.closed) }
     }
 
     private fun ensureReady() {
