@@ -3,7 +3,11 @@ package com.knte.preview.time.host
 import android.app.*
 import android.content.Intent
 import android.graphics.PixelFormat
+import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
+import android.view.Gravity
+import android.view.WindowInsets
 import android.view.WindowManager
 import com.knte.preview.time.overlay.*
 import kotlinx.coroutines.*
@@ -12,6 +16,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.time.LocalDateTime
+import java.time.ZoneId
 
 class TimeMonitorService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -20,6 +26,8 @@ class TimeMonitorService : Service() {
     private val operations = Mutex()
     private val window by lazy { getSystemService(WindowManager::class.java) }
     private var panel: TimerOverlayPanel? = null
+    private var panelLayout: WindowManager.LayoutParams? = null
+    private val elapsedClock = TimerOverlayElapsedClock()
     private var owned: OpaqueHostHandle? = null
     private var started = false
 
@@ -62,6 +70,13 @@ class TimeMonitorService : Service() {
                             stopSelf()
                         }
                     }
+                    scope.launch {
+                        while (isActive) {
+                            delay(1000)
+                            // Render-only tick: no authority operation, repository write or synthetic anchor.
+                            if (panel != null && monitorAccess(this@TimeMonitorService).allowed) render()
+                        }
+                    }
                 }
                 if (started) show()
             }
@@ -83,12 +98,49 @@ class TimeMonitorService : Service() {
         if (panel == null) {
             val next = TimerOverlayPanel(this, ::handle)
             try {
-                window.addView(next, WindowManager.LayoutParams(
-                    dp(320), -2, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                val area = safeWindowArea()
+                val params = WindowManager.LayoutParams(
+                    minOf(dp(320), area.right - area.left), -2, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL, PixelFormat.TRANSLUCENT
-                ))
+                ).apply {
+                    // LEFT is intentional: drag deltas and x/y are physical pixels, including in RTL locales.
+                    @Suppress("DEPRECATION")
+                    gravity = Gravity.TOP or Gravity.LEFT
+                    x = area.left
+                    y = area.top
+                }
+                next.setWindowCallbacks(object : TimerOverlayWindowCallbacks {
+                    override fun onDragBy(deltaX: Float, deltaY: Float) {
+                        val attached = panel
+                        val layout = panelLayout
+                        if (attached !== next || layout == null || !next.isAttachedToWindow ||
+                            !monitorAccess(this@TimeMonitorService).allowed) return
+                        val position = TimerOverlayWindowGeometry.drag(
+                            layout.x, layout.y, deltaX, deltaY, next.width, next.height, safeWindowArea()
+                        ) ?: return
+                        if (position.x == layout.x && position.y == layout.y) return
+                        val oldX = layout.x
+                        val oldY = layout.y
+                        layout.x = position.x
+                        layout.y = position.y
+                        try { window.updateViewLayout(next, layout) }
+                        catch (_: RuntimeException) {
+                            // Detach/revocation races are non-fatal and never become timer operations.
+                            layout.x = oldX
+                            layout.y = oldY
+                        }
+                    }
+
+                    override fun onProjectFocusChanged(focused: Boolean) {
+                        // Keep the existing focus/IME policy. A focus hint must not flip window flags.
+                    }
+                })
+                window.addView(next, params)
+                panelLayout = params
                 panel = next
             } catch (_: RuntimeException) {
+                next.setWindowCallbacks(null)
+                panelLayout = null
                 failNow()
                 return
             }
@@ -98,8 +150,13 @@ class TimeMonitorService : Service() {
     }
 
     private fun detach() {
-        panel?.let { runCatching { window.removeViewImmediate(it) } }
+        panel?.let {
+            it.setWindowCallbacks(null)
+            runCatching { window.removeViewImmediate(it) }
+        }
         panel = null
+        panelLayout = null
+        elapsedClock.reset()
         selected = null
     }
 
@@ -185,19 +242,49 @@ class TimeMonitorService : Service() {
             is AuthorityPhase.Review -> TimerOverlayPhase.PendingReview(p.message)
             is AuthorityPhase.Failed -> TimerOverlayPhase.Failed(p.message)
             is AuthorityPhase.Ready -> {
-                val running = p.view.records.filter { it.running() }.map {
+                val records = p.view.records.filter { it.running() }
+                val running = records.map {
                     TimerOverlayTarget(it.id, it.project, "${it.date} ${it.start}", "本地时记")
                 }
                 val snapshot = TimerOverlaySnapshot(running)
                 val target: String? = TimerOverlaySelectionResolver.resolve(snapshot, selected)?.id
-                when {
+                val clockTarget = records.singleOrNull { it.id == target }
+                    ?: records.singleOrNull()?.takeIf { selected == null }
+                if (clockTarget == null) elapsedClock.reset()
+                val clockText = when {
+                    records.isEmpty() -> null
+                    clockTarget == null -> "估算：请选择目标"
+                    else -> elapsedClock.estimate(
+                        clockTarget.id, clockTarget.begin, LocalDateTime.now(), ZoneId.systemDefault(), SystemClock.elapsedRealtime()
+                    )
+                }
+                val readyPhase = when {
                     p.view.reviewRequired || p.view.readError != null -> TimerOverlayPhase.PendingReview("待人工核对")
                     running.isEmpty() -> TimerOverlayPhase.Idle(snapshot)
                     else -> TimerOverlayPhase.Running(snapshot, target)
                 }
+                targetPanel.render(TimerOverlayPresentation(readyPhase, TimerOverlayMonitor.Running, expanded = expanded, clockText = clockText))
+                return
             }
         }
         targetPanel.render(TimerOverlayPresentation(phase, TimerOverlayMonitor.Running, expanded = expanded))
+    }
+
+    private fun safeWindowArea(): TimerOverlayWindowArea {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val metrics = window.currentWindowMetrics
+            val bounds = metrics.bounds
+            val insets = metrics.windowInsets.getInsetsIgnoringVisibility(
+                WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
+            )
+            return TimerOverlayWindowArea(
+                bounds.left + insets.left, bounds.top + insets.top,
+                bounds.right - insets.right, bounds.bottom - insets.bottom
+            )
+        }
+        @Suppress("DEPRECATION")
+        val metrics = android.util.DisplayMetrics().also { window.defaultDisplay.getRealMetrics(it) }
+        return TimerOverlayWindowArea(0, 0, metrics.widthPixels, metrics.heightPixels)
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()

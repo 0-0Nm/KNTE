@@ -14,6 +14,40 @@ interface TimerOverlayWindowCallbacks {
     fun onProjectFocusChanged(focused: Boolean)
 }
 
+/** Physical screen safe area, already reduced by host-provided system-bar/cutout insets. */
+internal data class TimerOverlayWindowArea(val left: Int, val top: Int, val right: Int, val bottom: Int) {
+    init {
+        require(right >= left) { "invalid horizontal window area" }
+        require(bottom >= top) { "invalid vertical window area" }
+    }
+}
+
+internal data class TimerOverlayWindowPosition(val x: Int, val y: Int)
+
+/** Pure gravity-independent math: x/y are physical LEFT/TOP coordinates, never dp or RTL offsets. */
+internal object TimerOverlayWindowGeometry {
+    fun drag(
+        currentX: Int,
+        currentY: Int,
+        deltaX: Float,
+        deltaY: Float,
+        viewWidth: Int,
+        viewHeight: Int,
+        area: TimerOverlayWindowArea,
+    ): TimerOverlayWindowPosition? {
+        if (!deltaX.isFinite() || !deltaY.isFinite()) return null
+        val width = viewWidth.coerceAtLeast(0)
+        val height = viewHeight.coerceAtLeast(0)
+        val maxX = maxOf(area.left.toDouble(), area.right.toDouble() - width.toDouble())
+        val maxY = maxOf(area.top.toDouble(), area.bottom.toDouble() - height.toDouble())
+        val x = (currentX.toDouble() + deltaX.toDouble())
+            .coerceIn(area.left.toDouble(), maxX).let { Math.rint(it) }.toInt()
+        val y = (currentY.toDouble() + deltaY.toDouble())
+            .coerceIn(area.top.toDouble(), maxY).let { Math.rint(it) }.toInt()
+        return TimerOverlayWindowPosition(x, y)
+    }
+}
+
 /** Pure touch-slop bookkeeping; no Android/window/timer effects. */
 internal class TimerOverlayDragGesture(private val slop: Float) {
     init { require(slop.isFinite() && slop >= 0f) }

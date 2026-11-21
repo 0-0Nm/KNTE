@@ -102,7 +102,7 @@ class TimerOverlayPanel(
     fun render(next: TimerOverlayPresentation) {
         rendered = next
         status.text = TimerOverlayText.phaseLabel(next.phase)
-        clock.text = next.clockText?.let { "估算：$it" } ?: "分钟事实由主机提供"
+        clock.text = next.clockText?.let { "计时$it" } ?: "计时估算不可用"
         project.visibility = if (next.phase is TimerOverlayPhase.PreparingStart || next.phase is TimerOverlayPhase.Idle) VISIBLE else GONE
         val editable = TimerOverlayText.projectEditable(next.phase)
         project.isEnabled = editable
